@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'velum_core_wrapper.dart';
+import 'text_sync_manager.dart';
+import 'status_bar.dart';
+import 'toolbar.dart';
+import 'package:file_picker/file_picker.dart';
 
 void main() {
   runApp(const MyApp());
@@ -32,8 +37,14 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _controller = TextEditingController();
-  bool _isUpdatingFromCore = false;
+  bool _isSaving = false;
   String _previousText = "";
+  bool _canUndo = true;
+  bool _canRedo = true;
+  
+  // TextSyncManager for optimized text sync
+  late final TextSyncManager _syncManager;
+  bool _isInitialized = false;
   
   // Metadata state
   int _wordCount = 0;
@@ -44,161 +55,181 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    _initDocument();
+    _syncManager = TextSyncManager(VelumCoreWrapper().api);
     _controller.addListener(_updateCursorPosition);
+    _initializeDocument();
+  }
+
+  Future<void> _initializeDocument() async {
+    final core = VelumCoreWrapper();
+    final content = await core.api.createEmptyDocument();
+    if (mounted) {
+      setState(() {
+        _controller.text = content;
+        _previousText = content;
+        _isInitialized = true;
+      });
+      _updateStats(content);
+    }
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_updateCursorPosition);
+    _syncManager.flush();
+    _syncManager.dispose();
     _controller.dispose();
     super.dispose();
   }
 
-  void _updateCursorPosition() async {
+  void _updateCursorPosition() {
     final offset = _controller.selection.baseOffset;
     if (offset >= 0) {
-      final core = VelumCoreWrapper();
-      final pos = await core.api.getCursorPosition(charOffset: offset);
+      final text = _controller.text;
+      // Calculate line and column from offset
+      int line = 1;
+      int column = 1;
+      for (int i = 0; i < offset && i < text.length; i++) {
+        if (text[i] == '\n') {
+          line++;
+          column = 1;
+        } else {
+          column++;
+        }
+      }
       setState(() {
-        _line = pos.field0;
-        _column = pos.field1;
+        _line = line;
+        _column = column;
       });
     }
   }
 
-  Future<void> _updateMetadata() async {
-    final core = VelumCoreWrapper();
-    final wc = await core.api.getWordCount();
-    final cc = await core.api.getCharCount();
-    setState(() {
-      _wordCount = wc;
-      _charCount = cc;
-    });
+  void _updateStats([String? text]) {
+    final content = text ?? _controller.text;
+    // Count characters
+    _charCount = content.length;
+    // Count words (split by whitespace and filter empty)
+    _wordCount = content.isEmpty ? 0 : content.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
   }
 
-  Future<void> _initDocument() async {
-    final core = VelumCoreWrapper();
-    final content = await core.api.createEmptyDocument();
-    setState(() {
-      _isUpdatingFromCore = true;
-      _controller.text = content;
-      _previousText = content;
-      _isUpdatingFromCore = false;
-    });
-    await _updateMetadata();
-  }
-
-  Future<void> _handleTextChanged(String text) async {
-    if (_isUpdatingFromCore) return;
-
-    final core = VelumCoreWrapper();
-    // For a basic interactive editor, we'll just sync the whole text for now
-    // In a real app, we'd use delta updates with insert_text/delete_text
-    // But since we need to use the new API:
+  Future<void> _onChanged(String newText) async {
+    if (!_isInitialized) return;
     
-    // Simple heuristic: if text is longer, it's an insertion, if shorter, deletion.
-    // However, for this task, let's just replace the whole content to keep it robust
-    // but the instructions say "Connect the editor's changes to the Rust insert_text and delete_text functions".
+    final oldText = _previousText;
+    _previousText = newText;
     
-    // To properly use insert/delete, we need to track the previous state.
-  }
-
-  // Improved sync logic
-  String _previousText = "";
-
-  Future<void> _onChanged(String currentText) async {
-    if (_isUpdatingFromCore) {
-      _previousText = currentText;
-      return;
-    }
-
-    final core = VelumCoreWrapper();
+    await _syncManager.onTextChanged(oldText, newText);
     
-    // Find the first difference from the start
-    int start = 0;
-    while (start < _previousText.length && start < currentText.length && _previousText[start] == currentText[start]) {
-      start++;
-    }
-
-    // Find the first difference from the end
-    int oldEnd = _previousText.length;
-    int newEnd = currentText.length;
-    while (oldEnd > start && newEnd > start && _previousText[oldEnd - 1] == currentText[newEnd - 1]) {
-      oldEnd--;
-      newEnd--;
-    }
-
-    // If oldEnd > start, something was deleted
-    if (oldEnd > start) {
-      await core.api.deleteText(offset: start, length: oldEnd - start);
-    }
-
-    // If newEnd > start, something was inserted
-    if (newEnd > start) {
-      String inserted = currentText.substring(start, newEnd);
-      await core.api.insertText(offset: start, newText: inserted);
-    }
-
-    _previousText = currentText;
-    await _updateMetadata();
-  }
-
-  Future<void> _saveDocument() async {
-    final core = VelumCoreWrapper();
-    // For now, save to a default location or we could use a file picker
-    final result = await core.api.saveToFile(path: 'document.vlm');
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
+      setState(() {
+        _updateStats(newText);
+        _updateCursorPosition();
+      });
     }
   }
 
-  Future<void> _undo() async {
+  Future<void> _syncFromCore() async {
     final core = VelumCoreWrapper();
-    final newText = await core.api.undo();
-    setState(() {
-      _isUpdatingFromCore = true;
-      _controller.text = newText;
-      _previousText = newText;
-      _isUpdatingFromCore = false;
-    });
+    final content = await core.api.getFullText();
+    
+    if (mounted && _controller.text != content) {
+      setState(() {
+        final cursorPos = _controller.selection.base.offset;
+        _controller.text = content;
+        _previousText = content;
+        
+        // Restore cursor position
+        if (cursorPos >= 0 && cursorPos <= content.length) {
+          _controller.selection = TextSelection.collapsed(offset: cursorPos);
+        }
+      });
+      _updateStats(content);
+      _updateCursorPosition();
+    }
   }
 
-  Future<void> _redo() async {
+  Future<void> _performUndo() async {
     final core = VelumCoreWrapper();
-    final newText = await core.api.redo();
-    setState(() {
-      _isUpdatingFromCore = true;
-      _controller.text = newText;
-      _previousText = newText;
-      _isUpdatingFromCore = false;
-    });
+    await core.api.undo();
+    await _syncFromCore();
+  }
+
+  Future<void> _performRedo() async {
+    final core = VelumCoreWrapper();
+    await core.api.redo();
+    await _syncFromCore();
+  }
+
+  Future<void> _saveFile() async {
+    setState(() => _isSaving = true);
+    try {
+      String? outputFile = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Document',
+        fileName: 'untitled.vlm',
+        allowedExtensions: ['vlm', 'json'],
+        lockParentWindow: true,
+      );
+      
+      if (outputFile != null) {
+        if (!outputFile.endsWith('.vlm') && !outputFile.endsWith('.json')) {
+          outputFile = '$outputFile.vlm';
+        }
+        final core = VelumCoreWrapper();
+        final content = await core.api.getFullText();
+        final file = File(outputFile);
+        await file.writeAsString(content);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Document saved to $outputFile')),
+          );
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _openFile() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Open Document',
+        allowedExtensions: ['vlm', 'json'],
+        lockParentWindow: true,
+      );
+      
+      if (result != null) {
+        final file = File(result.files.single.path!);
+        final content = await file.readAsString();
+        setState(() {
+          _controller.text = content;
+          _previousText = content;
+        });
+        _updateStats();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('File opened successfully')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error opening file: $e')),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.save),
-            onPressed: _saveDocument,
-            tooltip: 'Save',
-          ),
-          const VerticalDivider(width: 1, indent: 10, endIndent: 10),
-          IconButton(
-            icon: const Icon(Icons.undo),
-            onPressed: _undo,
-            tooltip: 'Undo',
-          ),
-          IconButton(
-            icon: const Icon(Icons.redo),
-            onPressed: _redo,
-            tooltip: 'Redo',
-          ),
-        ],
+      appBar: VelumToolbar(
+        onUndo: _performUndo,
+        onRedo: _performRedo,
+        onSave: _saveFile,
+        onOpen: _openFile,
+        canUndo: _canUndo,
+        canRedo: _canRedo,
+        isSaving: _isSaving,
       ),
       body: Column(
         children: [
@@ -225,23 +256,13 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
           ),
-          // Status Bar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            color: Colors.grey.shade200,
-            child: Row(
-              children: [
-                Text('Line: $_line, Col: $_column'),
-                const SizedBox(width: 20),
-                Text('Words: $_wordCount'),
-                const SizedBox(width: 20),
-                Text('Chars: $_charCount'),
-                const Spacer(),
-                const Text('UTF-8'),
-              ],
-            ),
-          ),
         ],
+      ),
+      bottomNavigationBar: StatusBar(
+        wordCount: _wordCount,
+        charCount: _charCount,
+        line: _line,
+        column: _column,
       ),
     );
   }

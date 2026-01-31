@@ -1,5 +1,7 @@
 use crate::piece_tree::PieceTree;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -280,8 +282,6 @@ pub fn replace_all(query: String, replacement: String) -> String {
 
 // ==================== Document Save/Load APIs ====================
 
-use serde::{Deserialize, Serialize};
-
 /// Serializable document structure for saving/loading
 #[derive(Serialize, Deserialize, Debug)]
 struct SerializableDocument {
@@ -346,11 +346,6 @@ pub fn load_document_from_text(text: String) -> String {
     doc.content.get_text()
 }
 
-// ==================== File System IO APIs ====================
-
-use std::fs;
-
-// 保存文档到指定路径 (JSON 格式)
 pub fn save_to_file(path: String) -> String {
     let json = save_document_to_json();
     if json.starts_with("Error:") {

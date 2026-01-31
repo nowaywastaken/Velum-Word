@@ -37,8 +37,27 @@ impl fmt::Display for BufferId {
     }
 }
 
+/// Text attributes for rich text formatting
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TextAttributes {
+    pub bold: Option<bool>,           // 加粗
+    pub italic: Option<bool>,         // 斜体
+    pub underline: Option<bool>,      // 下划线
+    pub font_size: Option<u16>,       // 字体大小
+    pub font_family: Option<String>,  // 字体名称
+    pub foreground: Option<String>,   // 前景色（十六进制如 "#FF0000"）
+    pub background: Option<String>,   // 背景色
+}
+
+impl TextAttributes {
+    /// Creates new text attributes with all fields set to None
+    pub fn new() -> Self {
+        TextAttributes::default()
+    }
+}
+
 /// Represents a piece of text from a buffer
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Piece {
     /// Starting position in the buffer (byte offset)
     pub start: usize,
@@ -48,16 +67,36 @@ pub struct Piece {
     pub buffer_id: BufferId,
     /// Character length for UTF-16/Unicode handling
     pub piece_char_length: usize,
+    /// Text attributes for rich text formatting
+    pub attributes: Option<TextAttributes>,
 }
 
 impl Piece {
-    /// Creates a new piece
+    /// Creates a new piece without attributes
     pub fn new(start: usize, length: usize, buffer_id: BufferId, piece_char_length: usize) -> Self {
         Piece {
             start,
             length,
             buffer_id,
             piece_char_length,
+            attributes: None,
+        }
+    }
+
+    /// Creates a new piece with attributes
+    pub fn new_with_attrs(
+        start: usize,
+        length: usize,
+        buffer_id: BufferId,
+        piece_char_length: usize,
+        attributes: Option<TextAttributes>,
+    ) -> Self {
+        Piece {
+            start,
+            length,
+            buffer_id,
+            piece_char_length,
+            attributes,
         }
     }
 
@@ -158,9 +197,15 @@ impl PieceTree {
 
     // ==================== Insertion ====================
 
-    /// Inserts text at the specified byte offset
+    /// Inserts text at the specified byte offset (without attributes)
     /// Returns true if successful
     pub fn insert(&mut self, offset: usize, text: String) -> bool {
+        self.insert_with_attrs(offset, text, None)
+    }
+
+    /// Inserts text at the specified byte offset with optional attributes
+    /// Returns true if successful
+    pub fn insert_with_attrs(&mut self, offset: usize, text: String, attributes: Option<TextAttributes>) -> bool {
         if text.is_empty() {
             return true;
         }
@@ -190,7 +235,7 @@ impl PieceTree {
 
         if self.pieces.is_empty() {
             // Empty document - create first piece
-            let piece = Piece::new(0, byte_count, new_buffer_id, char_count);
+            let piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.push(piece);
             self.total_char_count += char_count;
             self.total_length += byte_count;
@@ -202,7 +247,7 @@ impl PieceTree {
             Some(result) => result,
             None => {
                 // Insert at end
-                let piece = Piece::new(0, byte_count, new_buffer_id, char_count);
+                let piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
                 self.pieces.push(piece);
                 self.total_char_count += char_count;
                 self.total_length += byte_count;
@@ -216,12 +261,12 @@ impl PieceTree {
         
         if char_offset == 0 {
             // Insert at the beginning of this piece
-            let new_piece = Piece::new(0, byte_count, new_buffer_id, char_count);
+            let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx, new_piece);
             eprintln!("DEBUG: insert at beginning, pieces.len()={}", self.pieces.len());
         } else if char_offset == piece.piece_char_length {
             // Insert at the end of this piece
-            let new_piece = Piece::new(0, byte_count, new_buffer_id, char_count);
+            let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx + 1, new_piece);
             eprintln!("DEBUG: insert at end, pieces.len()={}", self.pieces.len());
         } else {
@@ -265,16 +310,17 @@ impl PieceTree {
             piece.length = left_byte_count;
             piece.piece_char_length = char_offset;
 
-            // Create right piece with correct values
-            let right_piece = Piece::new(
+            // Create right piece with correct values (inherits attributes from original piece)
+            let right_piece = Piece::new_with_attrs(
                 piece.start + right_piece_byte_offset,
                 original_piece_length - right_piece_byte_offset,
                 piece.buffer_id,
                 original_piece_char_length - char_offset,
+                piece.attributes.clone(),
             );
 
             // Insert new piece and right piece
-            let new_piece = Piece::new(0, byte_count, new_buffer_id, char_count);
+            let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             
             if right_piece.buffer_id == new_piece.buffer_id && 
                right_piece.start == new_piece.start + new_piece.length {
@@ -499,11 +545,12 @@ impl PieceTree {
 
             if delete_start_in_piece > 0 {
                 // Keep left part
-                let left_piece = Piece::new(
+                let left_piece = Piece::new_with_attrs(
                     piece.start,
                     delete_start_in_piece,
                     piece.buffer_id,
                     delete_start_in_piece,
+                    piece.attributes.clone(),
                 );
                 new_pieces.push(left_piece);
             }
@@ -512,11 +559,12 @@ impl PieceTree {
                 // Keep right part - calculate correct start position
                 let right_start = piece.start + delete_end_in_piece;
                 let right_length = piece.length - delete_end_in_piece;
-                let right_piece = Piece::new(
+                let right_piece = Piece::new_with_attrs(
                     right_start,
                     right_length,
                     piece.buffer_id,
                     right_length,
+                    piece.attributes.clone(),
                 );
                 new_pieces.push(right_piece);
             }

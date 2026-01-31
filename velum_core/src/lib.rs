@@ -1,3 +1,7 @@
-mod api;
+pub mod piece_tree;
+
+pub use piece_tree::{BufferId, Piece, PieceTree, TextAttributes};
+
 mod bridge_generated;
-mod piece_tree;
+mod api;
+pub use api::*;
