@@ -1,0 +1,20 @@
+# Flutter
+velum_ui/build/
+velum_ui/.dart_tool/
+velum_ui/.flutter-plugins
+velum_ui/.flutter-plugins-dependencies
+velum_ui/.packages
+velum_ui/pubspec.lock
+
+# Rust
+velum_core/target/
+velum_core/Cargo.lock
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
