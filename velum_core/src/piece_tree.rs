@@ -115,8 +115,11 @@ impl PieceTree {
         
         let piece = Piece::new(0, length, BufferId(1), char_count);
         
+        let mut pieces = Vec::new();
+        pieces.push(piece);
+        
         PieceTree {
-            pieces: vec![piece],
+            pieces,
             buffers,
             total_char_count: char_count,
             total_length: length,
@@ -882,8 +885,10 @@ mod tests {
     #[test]
     fn test_piece_tree_utf8() {
         let mut pt = PieceTree::new("Hello 世界".to_string());
+        // "Hello " = 6 bytes, insert at byte 6 (after space, before 世)
         pt.insert(6, " 你好".to_string());
-        assert_eq!(pt.get_text(), "Hello 世界 你好");
+        // Result: "Hello " + " 你好" + "世界" = "Hello  你好世界"
+        assert_eq!(pt.get_text(), "Hello  你好世界");
     }
 
     #[test]
@@ -896,10 +901,11 @@ mod tests {
     #[test]
     fn test_piece_tree_delete_utf8() {
         let mut pt = PieceTree::new("Hello 世界 你好".to_string());
-        let pos = "Hello ".len();
-        let len = "世界 ".len();
+        let pos = "Hello ".len(); // 6 bytes
+        let len = "世界 ".len(); // 7 bytes (2*3 + 1)
         pt.delete(pos, len);
-        assert_eq!(pt.get_text(), "Hello  你好");
+        // After delete: "Hello " + "你好" = "Hello 你好"
+        assert_eq!(pt.get_text(), "Hello 你好");
     }
 
     #[test]
@@ -924,7 +930,8 @@ mod tests {
         let mut pt = PieceTree::new("Hello World".to_string());
         assert_eq!(pt.piece_count(), 1);
         pt.insert(5, " Beautiful".to_string());
-        assert_eq!(pt.piece_count(), 2);
+        // Inserting in middle splits the original piece: left + new + right = 3 pieces
+        assert_eq!(pt.piece_count(), 3);
     }
 
     #[test]

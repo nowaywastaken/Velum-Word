@@ -33,11 +33,48 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _controller = TextEditingController();
   bool _isUpdatingFromCore = false;
+  String _previousText = "";
+  
+  // Metadata state
+  int _wordCount = 0;
+  int _charCount = 0;
+  int _line = 1;
+  int _column = 1;
 
   @override
   void initState() {
     super.initState();
     _initDocument();
+    _controller.addListener(_updateCursorPosition);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_updateCursorPosition);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _updateCursorPosition() async {
+    final offset = _controller.selection.baseOffset;
+    if (offset >= 0) {
+      final core = VelumCoreWrapper();
+      final pos = await core.api.getCursorPosition(charOffset: offset);
+      setState(() {
+        _line = pos.field0;
+        _column = pos.field1;
+      });
+    }
+  }
+
+  Future<void> _updateMetadata() async {
+    final core = VelumCoreWrapper();
+    final wc = await core.api.getWordCount();
+    final cc = await core.api.getCharCount();
+    setState(() {
+      _wordCount = wc;
+      _charCount = cc;
+    });
   }
 
   Future<void> _initDocument() async {
@@ -46,8 +83,10 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() {
       _isUpdatingFromCore = true;
       _controller.text = content;
+      _previousText = content;
       _isUpdatingFromCore = false;
     });
+    await _updateMetadata();
   }
 
   Future<void> _handleTextChanged(String text) async {
@@ -76,27 +115,42 @@ class _MyHomePageState extends State<MyHomePage> {
 
     final core = VelumCoreWrapper();
     
-    if (currentText.length > _previousText.length) {
-      // Likely an insertion
-      // Find where they differ
-      int i = 0;
-      while (i < _previousText.length && i < currentText.length && _previousText[i] == currentText[i]) {
-        i++;
-      }
-      int diffLen = currentText.length - _previousText.length;
-      String inserted = currentText.substring(i, i + diffLen);
-      await core.api.insertText(offset: i, newText: inserted);
-    } else if (currentText.length < _previousText.length) {
-      // Likely a deletion
-      int i = 0;
-      while (i < currentText.length && i < _previousText.length && currentText[i] == _previousText[i]) {
-        i++;
-      }
-      int diffLen = _previousText.length - currentText.length;
-      await core.api.deleteText(offset: i, length: diffLen);
+    // Find the first difference from the start
+    int start = 0;
+    while (start < _previousText.length && start < currentText.length && _previousText[start] == currentText[start]) {
+      start++;
+    }
+
+    // Find the first difference from the end
+    int oldEnd = _previousText.length;
+    int newEnd = currentText.length;
+    while (oldEnd > start && newEnd > start && _previousText[oldEnd - 1] == currentText[newEnd - 1]) {
+      oldEnd--;
+      newEnd--;
+    }
+
+    // If oldEnd > start, something was deleted
+    if (oldEnd > start) {
+      await core.api.deleteText(offset: start, length: oldEnd - start);
+    }
+
+    // If newEnd > start, something was inserted
+    if (newEnd > start) {
+      String inserted = currentText.substring(start, newEnd);
+      await core.api.insertText(offset: start, newText: inserted);
     }
 
     _previousText = currentText;
+    await _updateMetadata();
+  }
+
+  Future<void> _saveDocument() async {
+    final core = VelumCoreWrapper();
+    // For now, save to a default location or we could use a file picker
+    final result = await core.api.saveToFile(path: 'document.vlm');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
+    }
   }
 
   Future<void> _undo() async {
@@ -129,6 +183,12 @@ class _MyHomePageState extends State<MyHomePage> {
         title: Text(widget.title),
         actions: [
           IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: _saveDocument,
+            tooltip: 'Save',
+          ),
+          const VerticalDivider(width: 1, indent: 10, endIndent: 10),
+          IconButton(
             icon: const Icon(Icons.undo),
             onPressed: _undo,
             tooltip: 'Undo',
@@ -140,11 +200,11 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            Expanded(
+      body: Column(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
               child: Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.shade300),
@@ -164,8 +224,24 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+          // Status Bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            color: Colors.grey.shade200,
+            child: Row(
+              children: [
+                Text('Line: $_line, Col: $_column'),
+                const SizedBox(width: 20),
+                Text('Words: $_wordCount'),
+                const SizedBox(width: 20),
+                Text('Chars: $_charCount'),
+                const Spacer(),
+                const Text('UTF-8'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
