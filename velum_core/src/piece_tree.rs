@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::find::{SearchOptions, SearchResult, SearchResultSet, search, find_all_in_text};
 use std::fmt;
+use log::{debug, trace};
 
 /// Represents which buffer a piece comes from
 /// -1 means original buffer (index 0), other values are buffer indices
@@ -344,7 +345,7 @@ impl PieceTree {
         }
 
         // Debug
-        eprintln!("DEBUG insert: offset={}, text='{}' ({} bytes, {} chars)", 
+        debug!("insert: offset={}, text='{}' ({} bytes, {} chars)", 
                   offset, text, byte_count, char_count);
 
         // Add the new text to buffers
@@ -381,7 +382,7 @@ impl PieceTree {
             }
         };
 
-        eprintln!("DEBUG: piece_idx={}, char_offset={}", piece_idx, char_offset);
+        trace!("piece_idx={}, char_offset={}", piece_idx, char_offset);
 
         let piece = &mut self.pieces[piece_idx];
         
@@ -389,12 +390,12 @@ impl PieceTree {
             // Insert at the beginning of this piece
             let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx, new_piece);
-            eprintln!("DEBUG: insert at beginning, pieces.len()={}", self.pieces.len());
+            debug!("insert at beginning, pieces.len()={}", self.pieces.len());
         } else if char_offset == piece.piece_char_length {
             // Insert at the end of this piece
             let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx + 1, new_piece);
-            eprintln!("DEBUG: insert at end, pieces.len()={}", self.pieces.len());
+            debug!("insert at end, pieces.len()={}", self.pieces.len());
         } else {
             // Split the piece and insert in the middle
             // Get buffer for the piece being split
@@ -408,7 +409,7 @@ impl PieceTree {
                 .collect();
             let left_byte_count = left_text.len();
 
-            eprintln!("DEBUG: left_text='{}' ({} bytes)", left_text, left_byte_count);
+            trace!("left_text='{}' ({} bytes)", left_text, left_byte_count);
 
             // Capture original values before updating
             let original_piece_length = piece.length;
@@ -430,7 +431,7 @@ impl PieceTree {
                     .unwrap_or(original_piece_length)
             };
 
-            eprintln!("DEBUG: right_piece_byte_offset={}", right_piece_byte_offset);
+            trace!("right_piece_byte_offset={}", right_piece_byte_offset);
 
             // Update left piece
             piece.length = left_byte_count;
@@ -463,7 +464,7 @@ impl PieceTree {
                 self.pieces.insert(piece_idx + 2, right_piece);
             }
             
-            eprintln!("DEBUG: insert middle, pieces.len()={}", self.pieces.len());
+            debug!("insert middle, pieces.len()={}", self.pieces.len());
         }
 
         self.total_char_count += char_count;

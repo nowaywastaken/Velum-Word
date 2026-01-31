@@ -183,7 +183,7 @@ impl PartialOrd for BreakBox {
 /// Main line breaker struct implementing the Knuth-Plass algorithm
 #[derive(Debug, Clone)]
 pub struct LineBreaker {
-    config: LineBreakerConfig,
+    pub config: LineBreakerConfig,
     // Cache for text widths
     width_cache: HashMap<String, f32>,
     // Cache for character widths
