@@ -5,7 +5,6 @@
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
-use unicode_segmentation::UnicodeSegmentation;
 use std::sync::Arc;
 use crate::text_shaping::{TextShaper, GlyphInfo};
 
@@ -74,7 +73,7 @@ const TOO_LOOSE_RATIO: f32 = 0.7;
 const TOO_TIGHT_RATIO: f32 = 1.5;
 
 /// Maximum number of characters to look ahead for break points
-const MAX_LOOKAHEAD: usize = 20;
+const MAX_LOOKAHEAD: usize = 200;
 
 /// Penalties for various line break situations
 const PENALTY_HYPHEN: i32 = 50;
@@ -162,7 +161,7 @@ impl PartialOrd for BreakBox {
 #[derive(Debug, Clone)]
 pub struct LineBreaker {
     pub config: LineBreakerConfig,
-    shaper: Arc<TextShaper>,
+    shaper: Arc<TextShaper<'static>>,
 }
 
 impl Default for LineBreaker {
@@ -247,31 +246,33 @@ impl LineBreaker {
         || // CJK Symbols and Punctuation
         (code >= 0x3000 && code <= 0x303F)
         || // Hiragana
-        (code >= 0x3040 && code >= 0x309F)
+        (code >= 0x3040 && code <= 0x309F)
         || // Katakana
         (code >= 0x30A0 && code <= 0x30FF)
     }
 
     /// Gets break points for a line using HarfBuzz shaping
-    fn get_break_points(&mut self, text: &str) -> Vec<BreakPoint> {
+    pub(crate) fn get_break_points(&mut self, text: &str) -> Vec<BreakPoint> {
         let mut break_points: Vec<BreakPoint> = Vec::new();
         let len = text.len();
 
         // 1. Shape the entire text to get accurate glyph positions
-        // Returns width in logical pixels and glyphs with logical pixel advances
         let (total_width, glyphs) = self.shaper.shape(text);
 
-        // 2. Build a map of cluster (char index) -> x_position in pixels
-        let mut cluster_pos: HashMap<u32, f32> = HashMap::new();
+        // 2. Build a map of char_index -> x_position in pixels
+        let mut char_pos: HashMap<usize, f32> = HashMap::new();
+
+        // For simple ASCII text, estimate position based on accumulated width
+        // HarfBuzz glyphs have cluster indices that map to character positions
         let mut current_pos_px: f32 = 0.0;
-        
-        // Populate cluster positions from glyphs
         for glyph in &glyphs {
-             cluster_pos.entry(glyph.cluster).or_insert(current_pos_px);
-             current_pos_px += glyph.x_advance;
+            let char_idx = glyph.cluster as usize;
+            // Only set if not already set (first glyph for this cluster wins)
+            if !char_pos.contains_key(&char_idx) {
+                char_pos.insert(char_idx, current_pos_px);
+            }
+            current_pos_px += glyph.x_advance;
         }
-        // Add end position
-        cluster_pos.insert(len as u32, current_pos_px);
 
         // Add start break point
         break_points.push(BreakPoint {
@@ -284,55 +285,84 @@ impl LineBreaker {
             flagged: false,
         });
 
-        let mut in_word = false;
+        // 3. Iterate through characters to find break points
+        let chars: Vec<char> = text.chars().collect();
+        let char_count = chars.len();
 
-        for (char_idx, (i, ch)) in text.char_indices().enumerate() {
-             // Handle CJK characters - each can be a break point
-            if self.is_cjk(ch) {
-                // CJK: break after each character
-                let next_idx = i + ch.len_utf8();
-                let width = *cluster_pos.get(&(next_idx as u32)).unwrap_or(&current_pos_px);
-                
+        for (char_idx, ch) in chars.iter().enumerate() {
+            // Get current width from char_pos, or estimate if not available
+            let current_width = char_pos.get(&char_idx).copied().unwrap_or_else(|| {
+                // Fallback: estimate width based on character count
+                let estimated_char_width = total_width / char_count.max(1) as f32;
+                estimated_char_width * char_idx as f32
+            });
+
+            // Calculate width after this character (for the next break point)
+            let char_width = char_pos.get(&char_idx).copied()
+                .and_then(|w| char_pos.get(&(char_idx + 1)).copied().map(|next_w| next_w - w))
+                .unwrap_or_else(|| total_width / char_count.max(1) as f32);
+            let width_after = current_width + char_width;
+
+            // Handle CJK characters - each can be a break point
+            if self.is_cjk(*ch) {
+                // Find byte index of next character
+                let next_byte_idx = if char_idx + 1 < char_count {
+                    text.char_indices().nth(char_idx + 1).map(|(i, _)| i).unwrap_or(len)
+                } else {
+                    len
+                };
+
                 break_points.push(BreakPoint {
-                    position: next_idx,
+                    position: next_byte_idx,
                     char_offset: char_idx + 1,
-                    width,
+                    width: width_after,
                     break_type: BreakType::SoftBreak,
                     is_hyphenated: false,
                     penalty: 0,
                     flagged: false,
                 });
-                in_word = false;
                 continue;
             }
 
-            // Handle ASCII/whitespace
-            if ch == ' ' || ch == '\t' {
-                in_word = false;
-                continue;
-            }
+            // Handle ASCII/whitespace - allow break after spaces and tabs
+            if *ch == ' ' || *ch == '\t' {
+                let next_byte_idx = if char_idx + 1 < char_count {
+                    text.char_indices().nth(char_idx + 1).map(|(i, _)| i).unwrap_or(len)
+                } else {
+                    len
+                };
 
-            // Start of a word
-            if !in_word {
-                in_word = true;
+                break_points.push(BreakPoint {
+                    position: next_byte_idx,
+                    char_offset: char_idx + 1,
+                    width: width_after,
+                    break_type: BreakType::SoftBreak,
+                    is_hyphenated: false,
+                    penalty: 0,
+                    flagged: false,
+                });
+                continue;
             }
 
             // Check if we can break after this character
-            if self.is_break_after(ch) {
+            if self.is_break_after(*ch) {
+                let next_byte_idx = if char_idx + 1 < char_count {
+                    text.char_indices().nth(char_idx + 1).map(|(i, _)| i).unwrap_or(len)
+                } else {
+                    len
+                };
+
                 // Calculate penalty based on character
-                let penalty = match ch {
+                let penalty = match *ch {
                     '-' | '–' | '—' => PENALTY_HYPHEN,
                     '!' | '?' => PENALTY_HARD,
                     _ => 0,
                 };
-                
-                let next_idx = i + ch.len_utf8();
-                let width = *cluster_pos.get(&(next_idx as u32)).unwrap_or(&current_pos_px);
 
                 break_points.push(BreakPoint {
-                    position: next_idx, // Byte position
+                    position: next_byte_idx,
                     char_offset: char_idx + 1,
-                    width,
+                    width: width_after,
                     break_type: BreakType::SoftBreak,
                     is_hyphenated: false,
                     penalty,
@@ -341,20 +371,28 @@ impl LineBreaker {
             }
         }
 
-        // Add end break point
-        let char_count = text.chars().count();
-        break_points.push(BreakPoint {
+        // Add end break point with total width
+        // Use a unique key to avoid deduplication with SoftBreaks at the same position
+        // Store the HardBreak separately and add it after dedup
+        let end_break = BreakPoint {
             position: len,
             char_offset: char_count,
-            width: current_pos_px,
+            width: total_width,
             break_type: BreakType::HardBreak,
             is_hyphenated: false,
             penalty: 0,
             flagged: false,
+        };
+
+        // Remove duplicates (SoftBreaks) but keep HardBreaks
+        break_points.retain(|bp| {
+            // Keep if position is different, or if it's a HardBreak
+            bp.position != len || bp.break_type == BreakType::HardBreak
         });
-        
-        // Remove duplicates and sort
-        break_points.dedup_by_key(|bp| bp.position);
+        break_points.push(end_break);
+
+        // Sort by position
+        break_points.sort_by_key(|bp| bp.position);
 
         break_points
     }
@@ -432,9 +470,9 @@ impl LineBreaker {
             for (line_num, prev_break, total_demerits) in &active_breaks {
                 // Calculate line width
                 let line_width = current.width - prev_break.width;
-                
-                // Skip if line is too long
-                if line_width > max_width * 2.0 {
+
+                // Skip if line is too long (except for HardBreak at end of paragraph)
+                if line_width > max_width * 2.0 && current.break_type != BreakType::HardBreak {
                     continue;
                 }
 
@@ -445,11 +483,8 @@ impl LineBreaker {
                     f32::MAX
                 };
 
-                let line_demerits = if current.break_type == BreakType::HardBreak {
-                    0.0
-                } else {
-                    self.calculate_demerits(line_width, *line_num + 1, ratio)
-                };
+                // Calculate demerits - HardBreak still has demerits for being too long
+                let line_demerits = self.calculate_demerits(line_width, *line_num + 1, ratio);
                 let mut total = total_demerits + line_demerits;
 
                 // Add penalty for flagged breaks
@@ -475,8 +510,14 @@ impl LineBreaker {
                     }
                 }
 
-                // Limit look-ahead
-                if current.char_offset - prev_break.char_offset > MAX_LOOKAHEAD {
+                // Limit look-ahead (but always allow HardBreak at end of paragraph)
+                // For HardBreak, use a much larger limit to find the best preceding break
+                let look_ahead_limit = if current.break_type == BreakType::HardBreak {
+                    usize::MAX // No limit for HardBreak
+                } else {
+                    MAX_LOOKAHEAD
+                };
+                if current.char_offset - prev_break.char_offset > look_ahead_limit {
                     continue;
                 }
 
@@ -491,6 +532,13 @@ impl LineBreaker {
                     // Valid break point
                     new_candidates.push((*line_num + 1, current.clone(), total));
                     chosen_breaks.insert(current.position, (prev_break.position, current.clone()));
+                } else if current.break_type == BreakType::HardBreak && line_width <= max_width * 2.0 {
+                    // Hard break that exceeds max_width but is still usable (for final fallback)
+                    if total < best_demerits {
+                        best_demerits = total;
+                        best_break = Some(current.clone());
+                        chosen_breaks.insert(current.position, (prev_break.position, current.clone()));
+                    }
                 }
             }
 
