@@ -18,3 +18,4 @@ velum_core/Cargo.lock
 
 # OS
 .DS_Store
+.worktrees/
