@@ -610,3 +610,280 @@ pub struct ContentControlProperties {
     /// Is temporary
     pub is_temporary: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_relationship_creation() {
+        let rel = Relationship {
+            id: "rId1".to_string(),
+            relationship_type: RelationshipType::Document,
+            target: "word/document.xml".to_string(),
+            target_mode: Some("Internal".to_string()),
+        };
+        assert_eq!(rel.id, "rId1");
+        assert_eq!(rel.target, "word/document.xml");
+    }
+
+    #[test]
+    fn test_package_part_creation() {
+        let part = PackagePart {
+            name: "/word/document.xml".to_string(),
+            content_type: ContentType::MainDocument,
+            data: b"<test>data</test>".to_vec(),
+        };
+        assert_eq!(part.name, "/word/document.xml");
+        assert_eq!(part.data.len(), 17);
+    }
+
+    #[test]
+    fn test_paragraph_default() {
+        let para = Paragraph::default();
+        assert!(para.text.is_empty());
+        assert!(para.runs.is_empty());
+    }
+
+    #[test]
+    fn test_paragraph_with_runs() {
+        let mut para = Paragraph::default();
+        para.text = "Hello World".to_string();
+        para.runs.push(Run {
+            text: "Hello".to_string(),
+            properties: RunProperties::default(),
+        });
+        assert_eq!(para.runs.len(), 1);
+    }
+
+    #[test]
+    fn test_run_properties_default() {
+        let props = RunProperties::default();
+        assert!(props.bold.is_none());
+        assert!(props.italic.is_none());
+    }
+
+    #[test]
+    fn test_run_properties_with_values() {
+        let mut props = RunProperties::default();
+        props.bold = Some(true);
+        props.italic = Some(true);
+        props.font_size = Some(24);
+        props.font_name = Some("Arial".to_string());
+        props.color = Some("#FF0000".to_string());
+
+        assert_eq!(props.bold, Some(true));
+        assert_eq!(props.italic, Some(true));
+        assert_eq!(props.font_size, Some(24));
+    }
+
+    #[test]
+    fn test_style_default() {
+        let style = Style::default();
+        assert!(style.id.is_empty());
+        assert!(!style.is_default); // is_default is bool, default is false
+    }
+
+    #[test]
+    fn test_theme_default() {
+        let theme = Theme::default();
+        assert!(theme.name.is_empty());
+        assert!(theme.colors.is_empty());
+    }
+
+    #[test]
+    fn test_theme_with_values() {
+        let mut theme = Theme::default();
+        theme.name = "Office Theme".to_string();
+        theme.colors.insert("dk1".to_string(), "#000000".to_string());
+        theme.colors.insert("lt1".to_string(), "#FFFFFF".to_string());
+
+        assert_eq!(theme.colors.len(), 2);
+    }
+
+    #[test]
+    fn test_table_creation() {
+        let table = Table::default();
+        assert!(table.rows.is_empty());
+    }
+
+    #[test]
+    fn test_table_with_rows() {
+        let mut table = Table::default();
+        table.rows.push(TableRow::default());
+        table.rows.push(TableRow::default());
+        assert_eq!(table.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_table_cell_default() {
+        let cell = TableCell::default();
+        assert!(cell.paragraphs.is_empty());
+        assert!(cell.properties.shading_color.is_none());
+    }
+
+    #[test]
+    fn test_table_borders_default() {
+        let borders = TableBorders::default();
+        assert!(borders.top.is_none());
+        assert!(borders.bottom.is_none());
+    }
+
+    #[test]
+    fn test_table_border_creation() {
+        let border = TableBorder {
+            style: Some("single".to_string()),
+            size: Some(4),
+            color: Some("#000000".to_string()),
+        };
+        assert_eq!(border.style, Some("single".to_string()));
+    }
+
+    #[test]
+    fn test_header_footer_default() {
+        let header = Header::default();
+        assert!(header.paragraphs.is_empty());
+
+        let footer = Footer::default();
+        assert!(footer.paragraphs.is_empty());
+    }
+
+    #[test]
+    fn test_footnote_endnote_default() {
+        let footnote = Footnote::default();
+        assert!(footnote.paragraphs.is_empty());
+        assert!(footnote.id.is_empty());
+
+        let endnote = Endnote::default();
+        assert!(endnote.paragraphs.is_empty());
+    }
+
+    #[test]
+    fn test_numbering_default() {
+        let num = Numbering::default();
+        assert!(num.abstract_num_defs.is_empty());
+        assert!(num.num_instances.is_empty());
+    }
+
+    #[test]
+    fn test_abstract_num_def() {
+        let def = AbstractNumDef {
+            abstract_num_id: "0".to_string(),
+            levels: vec![],
+        };
+        assert_eq!(def.abstract_num_id, "0");
+    }
+
+    #[test]
+    fn test_list_level() {
+        let level = ListLevel {
+            level: 0,
+            format: "bullet".to_string(),
+            text: "·".to_string(),
+            start_value: 1,
+            paragraph_properties: ParagraphProperties::default(),
+            run_properties: RunProperties::default(),
+        };
+        assert_eq!(level.level, 0);
+        assert_eq!(level.format, "bullet");
+    }
+
+    #[test]
+    fn test_num_instance() {
+        let instance = NumInstance {
+            num_id: "1".to_string(),
+            abstract_num_id: "0".to_string(),
+            overrides: vec![],
+        };
+        assert_eq!(instance.num_id, "1");
+    }
+
+    #[test]
+    fn test_level_override() {
+        let override_ = LevelOverride {
+            level: 0,
+            start_value: Some(5),
+            text: Some("5.".to_string()),
+        };
+        assert_eq!(override_.level, 0);
+        assert_eq!(override_.start_value, Some(5));
+    }
+
+    #[test]
+    fn test_content_control_default() {
+        let cc = ContentControl::default();
+        assert!(cc.tag.is_none());
+        assert!(cc.content.is_empty());
+    }
+
+    #[test]
+    fn test_content_control_properties_default() {
+        let props = ContentControlProperties::default();
+        assert!(props.placeholder_text.is_none());
+        assert!(!props.is_temporary);
+    }
+
+    #[test]
+    fn test_document_image_default() {
+        let img = DocumentImage::default();
+        assert!(img.id.is_empty());
+        assert!(img.path.is_empty());
+    }
+
+    #[test]
+    fn test_blip_fill_default() {
+        let blip = BlipFill::default();
+        assert!(blip.image_reference.is_empty());
+        assert!(blip.tile_mode.is_none());
+        assert!(blip.stretch_mode.is_none());
+        assert!(blip.source_rect.is_none());
+    }
+
+    #[test]
+    fn test_source_rect_default() {
+        let rect = SourceRect::default();
+        assert_eq!(rect.top, 0.0);
+        assert_eq!(rect.left, 0.0);
+        assert_eq!(rect.bottom, 0.0);
+        assert_eq!(rect.right, 0.0);
+    }
+
+    #[test]
+    fn test_document_anchor_default() {
+        let anchor = DocumentAnchor {
+            anchor_type: "page".to_string(),
+            page_number: None,
+            paragraph_id: None,
+            character_position: None,
+            horizontal: None,
+            vertical: None,
+            allow_overlap: false,
+        };
+        assert_eq!(anchor.anchor_type, "page");
+        assert!(!anchor.allow_overlap);
+    }
+
+    #[test]
+    fn test_paragraph_properties_default() {
+        let props = ParagraphProperties::default();
+        assert!(props.alignment.is_none());
+        assert!(props.indent_left.is_none());
+    }
+
+    #[test]
+    fn test_theme_fonts_default() {
+        let fonts = ThemeFonts::default();
+        assert!(fonts.major_font.is_empty());
+        assert!(fonts.minor_font.is_empty());
+    }
+
+    #[test]
+    fn test_theme_fonts_with_values() {
+        let mut fonts = ThemeFonts::default();
+        fonts.major_font = "Calibri".to_string();
+        fonts.minor_font = "宋体".to_string();
+        fonts.symbol_font = "Symbol".to_string();
+
+        assert_eq!(fonts.major_font, "Calibri");
+    }
+}

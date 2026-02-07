@@ -343,4 +343,159 @@ mod tests {
         assert_eq!(parsed.paragraph_count, 1);
         assert_eq!(parsed.title, Some("Test Document".to_string()));
     }
+
+    #[test]
+    fn test_content_type_image_detection() {
+        let png = ContentType::from_string("image/png");
+        assert!(png.is_image());
+
+        let jpeg = ContentType::from_string("image/jpeg");
+        assert!(jpeg.is_image());
+
+        let gif = ContentType::from_string("image/gif");
+        assert!(gif.is_image());
+
+        let svg = ContentType::from_string("image/svg+xml");
+        assert!(svg.is_image());
+
+        let doc = ContentType::from_string("application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml");
+        assert!(!doc.is_image());
+    }
+
+    #[test]
+    fn test_content_type_default_part_name() {
+        let main_doc = ContentType::MainDocument;
+        assert_eq!(main_doc.default_part_name(), Some("/word/document.xml"));
+
+        let styles = ContentType::Styles;
+        assert_eq!(styles.default_part_name(), Some("/word/styles.xml"));
+
+        let core_props = ContentType::CoreProperties;
+        assert_eq!(core_props.default_part_name(), Some("/docProps/core.xml"));
+
+        let image = ContentType::ImagePng;
+        assert_eq!(image.default_part_name(), None);
+    }
+
+    #[test]
+    fn test_relationship_type_image_detection() {
+        let image = RelationshipType::from_string("http://schemas.openxmlformats.org/officeDocument/2006/relationships/image");
+        assert!(image.is_image());
+
+        let document = RelationshipType::from_string("http://schemas.openxmlformats.org/officeDocument/2006/relationships/mainDocument");
+        assert!(!document.is_image());
+    }
+
+    #[test]
+    fn test_content_type_all_variants() {
+        // Test all known content types
+        let variants = [
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml", ContentType::Styles),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.theme+xml", ContentType::Theme),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml", ContentType::Settings),
+            ("application/vnd.openxmlformats-package.core-properties+xml", ContentType::CoreProperties),
+            ("application/vnd.openxmlformats-officedocument.extended-properties+xml", ContentType::AppProperties),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml", ContentType::WebSettings),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml", ContentType::Numbering),
+            ("image/png", ContentType::ImagePng),
+            ("image/jpeg", ContentType::ImageJpeg),
+            ("image/gif", ContentType::ImageGif),
+            ("image/bmp", ContentType::ImageBmp),
+            ("image/webp", ContentType::ImageWebP),
+            ("image/tiff", ContentType::ImageTiff),
+            ("image/svg+xml", ContentType::ImageSvg),
+        ];
+
+        for (input, expected) in variants {
+            let result = ContentType::from_string(input);
+            assert_eq!(result, expected, "Failed for: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_relationship_type_all_variants() {
+        let variants = [
+            ("http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme", RelationshipType::Theme),
+            ("http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", RelationshipType::Settings),
+            ("http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties", RelationshipType::CoreProperties),
+            ("http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml", RelationshipType::CustomXml),
+            ("http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail", RelationshipType::Thumbnail),
+        ];
+
+        for (input, expected) in variants {
+            let result = RelationshipType::from_string(input);
+            assert_eq!(result, expected, "Failed for: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_jpeg_alias_mapping() {
+        let jpeg_short = ContentType::from_string("image/jpg");
+        assert_eq!(jpeg_short, ContentType::ImageJpeg);
+
+        let tif_short = ContentType::from_string("image/tif");
+        assert_eq!(tif_short, ContentType::ImageTiff);
+    }
+
+    #[test]
+    fn test_parse_ooxml_invalid_zip() {
+        // Invalid ZIP data should fail
+        let result = parse_ooxml(b"not a zip file");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parsed_document_default() {
+        let doc = ParsedDocument::default();
+        assert!(doc.text.is_empty());
+        assert!(doc.styles.is_empty());
+        assert_eq!(doc.paragraph_count, 0);
+        assert_eq!(doc.char_count, 0);
+        assert_eq!(doc.word_count, 0);
+    }
+
+    #[test]
+    fn test_parsed_document_with_all_fields() {
+        let mut styles = std::collections::HashMap::new();
+        styles.insert("Normal".to_string(), Style::default());
+
+        let doc = ParsedDocument {
+            text: "Test content".to_string(),
+            styles,
+            paragraph_count: 1,
+            char_count: 12,
+            word_count: 2,
+            title: Some("Title".to_string()),
+            author: Some("Author".to_string()),
+            created_at: Some("2024-01-01".to_string()),
+            modified_at: Some("2024-01-02".to_string()),
+            theme: None,
+            tables: Vec::new(),
+            images: Vec::new(),
+            headers: Vec::new(),
+            footers: Vec::new(),
+            footnotes: Vec::new(),
+            endnotes: Vec::new(),
+            numbering: Vec::new(),
+        };
+
+        assert_eq!(doc.text, "Test content");
+        assert_eq!(doc.styles.len(), 1);
+        assert_eq!(doc.title, Some("Title".to_string()));
+        assert_eq!(doc.author, Some("Author".to_string()));
+    }
+
+    #[test]
+    fn test_document_from_json_invalid() {
+        let result = document_from_json("invalid json {{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_document_to_json_error() {
+        // This should not fail since ParsedDocument is serializable
+        let doc = ParsedDocument::default();
+        let result = document_to_json(&doc);
+        assert!(result.is_ok());
+    }
 }

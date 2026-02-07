@@ -267,3 +267,180 @@ impl<'a> TextShaper<'a> {
         width
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_text_shaper_new() {
+        let shaper = TextShaper::new();
+        // Should always succeed (falls back if no font)
+        let (width, _) = shaper.shape("test");
+        assert!(width >= 0.0);
+    }
+
+    #[test]
+    fn test_shape_empty_text() {
+        let shaper = TextShaper::new();
+        let (width, glyphs) = shaper.shape("");
+        assert_eq!(width, 0.0);
+        assert!(glyphs.is_empty());
+    }
+
+    #[test]
+    fn test_measure_width_empty() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("");
+        assert_eq!(width, 0.0);
+    }
+
+    #[test]
+    fn test_measure_width_ascii() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("hello");
+        assert!(width > 0.0, "ASCII text should have positive width");
+    }
+
+    #[test]
+    fn test_measure_width_cjk() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("中文");
+        assert!(width > 0.0, "CJK text should have positive width");
+    }
+
+    #[test]
+    fn test_measure_width_mixed() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("Hello世界");
+        assert!(width > 0.0, "Mixed text should have positive width");
+    }
+
+    #[test]
+    fn test_measure_width_numbers() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("12345");
+        assert!(width > 0.0, "Numbers should have positive width");
+    }
+
+    #[test]
+    fn test_measure_width_special_chars() {
+        let shaper = TextShaper::new();
+        let width = shaper.measure_width("!@#$%");
+        assert!(width >= 0.0, "Special chars should have non-negative width");
+    }
+
+    #[test]
+    fn test_shape_returns_glyphs_for_ascii() {
+        let shaper = TextShaper::new();
+        let (width, glyphs) = shaper.shape("ab");
+        assert!(glyphs.len() >= 1, "Should return at least one glyph");
+    }
+
+    #[test]
+    fn test_shape_returns_glyphs_for_cjk() {
+        let shaper = TextShaper::new();
+        let (width, glyphs) = shaper.shape("中");
+        // CJK characters might produce one glyph per character
+        assert!(glyphs.len() >= 1, "CJK should return at least one glyph");
+    }
+
+    #[test]
+    fn test_glyph_info_structure() {
+        let shaper = TextShaper::new();
+        let (_, glyphs) = shaper.shape("x");
+        if let Some(glyph) = glyphs.first() {
+            assert!(glyph.codepoint > 0, "Codepoint should be valid");
+            assert!(glyph.x_advance >= 0.0, "X advance should be non-negative");
+        }
+    }
+
+    #[test]
+    fn test_has_font_initially() {
+        let shaper = TextShaper::new();
+        // has_font returns whether a real font is loaded
+        // The fallback shaper is acceptable
+        let _ = shaper.has_font();
+    }
+
+    #[test]
+    fn test_text_shaper_fallback() {
+        let shaper = TextShaper::fallback();
+        let (width, _) = shaper.shape("test");
+        assert!(width >= 0.0);
+        assert!(!shaper.has_font());
+    }
+
+    #[test]
+    fn test_estimate_widths_ascii() {
+        let shaper = TextShaper::fallback();
+        let (width, glyphs) = shaper.estimate_widths("abc");
+        assert!(width > 0.0);
+        assert_eq!(glyphs.len(), 3, "Should have one glyph per char for ASCII");
+    }
+
+    #[test]
+    fn test_estimate_widths_cjk() {
+        let shaper = TextShaper::fallback();
+        let (width, glyphs) = shaper.estimate_widths("中文");
+        assert!(width > 0.0);
+        assert_eq!(glyphs.len(), 2, "Should have one glyph per CJK char");
+    }
+
+    #[test]
+    fn test_cjk_chars_wider_than_ascii() {
+        let shaper = TextShaper::fallback();
+        let ascii_width = shaper.measure_width("a");
+        let cjk_width = shaper.measure_width("中");
+        // CJK chars are estimated to be 2x wider
+        assert!(cjk_width > ascii_width, "CJK should be wider than ASCII");
+    }
+
+    #[test]
+    fn test_long_text_shaping() {
+        let shaper = TextShaper::new();
+        let long_text = "This is a very long text that should be shaped correctly. ".repeat(100);
+        let (width, _) = shaper.shape(&long_text);
+        assert!(width > 0.0, "Long text should have positive width");
+    }
+
+    #[test]
+    fn test_whitespace_shaping() {
+        let shaper = TextShaper::new();
+        let spaces = shaper.measure_width("     ");
+        assert!(spaces >= 0.0);
+    }
+
+    #[test]
+    fn test_newline_shaping() {
+        let shaper = TextShaper::new();
+        let with_newline = shaper.measure_width("line1\nline2");
+        let without_newline = shaper.measure_width("line1line2");
+        // Should be similar but newline might add small width
+        let _ = with_newline;
+        let _ = without_newline;
+    }
+
+    #[test]
+    fn test_tab_shaping() {
+        let shaper = TextShaper::new();
+        let with_tab = shaper.measure_width("a\tb");
+        let without_tab = shaper.measure_width("ab");
+        assert!(with_tab >= without_tab, "Tab should add width");
+    }
+
+    #[test]
+    fn test_emoji_shaping() {
+        let shaper = TextShaper::new();
+        let emoji_width = shaper.measure_width("😊");
+        assert!(emoji_width >= 0.0, "Emoji should have non-negative width");
+    }
+
+    #[test]
+    fn test_shape_multiple_times_consistent() {
+        let shaper = TextShaper::new();
+        let width1 = shaper.measure_width("test");
+        let width2 = shaper.measure_width("test");
+        assert_eq!(width1, width2, "Width measurements should be consistent");
+    }
+}
