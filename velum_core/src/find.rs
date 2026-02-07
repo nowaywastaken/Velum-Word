@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use regex::Regex;
-use std::collections::HashMap;
 
 /// Search options for find and replace operations
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,7 +185,7 @@ fn simple_search(
 
     if backward {
         // Search backward
-        let mut search_range = if from == 0 {
+        let search_range = if from == 0 {
             0..0
         } else {
             0..from

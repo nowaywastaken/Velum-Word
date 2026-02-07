@@ -6,7 +6,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
-use crate::text_shaping::{TextShaper, GlyphInfo};
+use crate::text_shaping::TextShaper;
 
 /// Represents the type of line break
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +78,6 @@ const MAX_LOOKAHEAD: usize = 200;
 /// Penalties for various line break situations
 const PENALTY_HYPHEN: i32 = 50;
 const PENALTY_HARD: i32 = 100;
-const PENALTY_FLAGGED: i32 = 20;
 
 /// Demerits multipliers
 const DEMERITS_FLAGGED: f32 = 100.0;
@@ -420,7 +419,7 @@ impl LineBreaker {
     }
 
     /// Calculates demerits for a line based on its ratio to max width
-    fn calculate_demerits(&self, line_width: f32, line_number: usize, ratio: f32) -> f32 {
+    fn calculate_demerits(&self, _line_width: f32, _line_number: usize, ratio: f32) -> f32 {
         let demerits = if ratio > 1.0 {
             // Line is too long - square of excess ratio
             (ratio - 1.0).powi(2) * 100.0
@@ -446,7 +445,7 @@ impl LineBreaker {
         }
 
         let max_width = self.config.max_width;
-        let mut candidates: BinaryHeap<BreakBox> = BinaryHeap::new();
+        let _candidates: BinaryHeap<BreakBox> = BinaryHeap::new();
         let mut active_breaks: Vec<(usize, BreakPoint, f32)> = Vec::new(); // (line_number, break_point, total_demerits)
         let mut chosen_breaks: HashMap<usize, (usize, BreakPoint)> = HashMap::new(); // position -> (prev_position, break_point)
 
@@ -459,7 +458,7 @@ impl LineBreaker {
         let mut best_demerits = f32::MAX;
 
         // Process break points
-        for (i, current) in break_points.iter().enumerate() {
+        for (_i, current) in break_points.iter().enumerate() {
             if current.position == 0 {
                 continue;
             }

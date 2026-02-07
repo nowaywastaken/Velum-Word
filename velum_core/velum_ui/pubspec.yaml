@@ -1,0 +1,47 @@
+name: velum_ui
+description: Flutter UI integration layer for Velum Core Rust library
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Reactive programming
+  rxdart: ^0.27.7
+
+  # File picker
+  file_picker: ^8.0.0
+
+  # Path handling
+  path: ^1.8.3
+
+  # Async utilities
+  async: ^2.11.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.velum.velum_ui
+        pluginClass: VelumUiPlugin
+      ios:
+        pluginClass: VelumUiPlugin
+      linux:
+        pluginClass: VelumUiPlugin
+      macos:
+        pluginClass: VelumUiPlugin
+      windows:
+        pluginClass: VelumUiPlugin
+
+# Configuration for flutter_rust_bridge
+# Run: flutter_rust_bridge_codegen --rust-input src/api.rs --dart-output lib/bridge_generated.dart

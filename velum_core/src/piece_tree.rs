@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::find::{SearchOptions, SearchResult, SearchResultSet, search, find_all_in_text};
 use std::fmt;
-use log::{trace, debug};
+use log::trace;
 
 /// Represents which buffer a piece comes from
 /// -1 means original buffer (index 0), other values are buffer indices
@@ -1025,7 +1025,6 @@ impl PieceTree {
             return 0;
         }
 
-        let text = self.get_text();
         let results = self.find_all(options);
 
         if results.results.is_empty() {
@@ -1160,14 +1159,14 @@ mod tests {
 
     #[test]
     fn test_piece_tree_get_range() {
-        let mut pt = PieceTree::new("Hello Beautiful World".to_string());
+        let pt = PieceTree::new("Hello Beautiful World".to_string());
         let range = pt.get_text_range(6, 9);
         assert_eq!(range, "Beautiful");
     }
 
     #[test]
     fn test_piece_tree_move_to() {
-        let mut pt = PieceTree::new("Hello\nWorld".to_string());
+        let pt = PieceTree::new("Hello\nWorld".to_string());
         let (line, col) = pt.move_to(6);
         assert_eq!(line, 2);
         assert_eq!(col, 1);
@@ -1274,7 +1273,7 @@ mod tests {
 
     #[test]
     fn test_piece_tree_move_to_end() {
-        let mut pt = PieceTree::new("Hello\nWorld".to_string());
+        let pt = PieceTree::new("Hello\nWorld".to_string());
         let (line, col) = pt.move_to(11);
         assert_eq!(line, 2);
         assert_eq!(col, 6);

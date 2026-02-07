@@ -10,7 +10,7 @@ use super::error::OoxmlError;
 use super::types::{ContentType, PackagePart, Relationship, RelationshipType};
 
 /// OPC Package Reader
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct OpcPackage {
     /// All parts in the package indexed by part name
     pub parts: HashMap<String, PackagePart>,

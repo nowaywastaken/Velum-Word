@@ -3,9 +3,8 @@
 //! Provides higher-level text layout functionality including paragraph layout
 //! and bidirectional text support.
 
-use crate::line_breaking::{BreakType, Line, LineBreaker};
+use crate::line_breaking::{BreakType, LineBreaker};
 use serde::{Deserialize, Serialize};
-use unicode_bidi::BidiInfo;
 
 /// Line spacing rule enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -313,21 +312,6 @@ impl LineLayout {
             // Subsequent lines: just left indent
             left_indent
         }
-    }
-
-    /// Calculates justify spacing for a line
-    fn calculate_justify_spacing(&self, line: &LineLayoutInfo, content_width: f32) -> f32 {
-        if line.break_type != "SoftBreak" {
-            // Don't justify hard breaks or the last line
-            return 0.0;
-        }
-
-        let line_with_trailing = line.width + line.trailing_whitespace;
-        if line_with_trailing >= content_width {
-            return 0.0;
-        }
-
-        content_width - line_with_trailing
     }
 
     /// Layouts a single paragraph with default properties

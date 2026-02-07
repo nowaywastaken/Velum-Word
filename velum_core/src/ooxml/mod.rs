@@ -22,9 +22,16 @@ mod types;
 mod opc;
 mod document;
 mod converter;
+mod serializer;
 
 pub use error::OoxmlError;
 pub use converter::ooxml_to_piece_tree;
+pub use serializer::{
+    DocxSerializer,
+    ExportOptions,
+    ExportFormat,
+    piece_tree_to_word_document,
+};
 pub use types::{
     ContentType,
     Paragraph,
@@ -37,6 +44,35 @@ pub use types::{
     Theme,
     ThemeFonts,
     PackagePart,
+    DocumentImage,
+    BlipFill,
+    SourceRect,
+    DocumentAnchor,
+    AnchorPositionSpec,
+    // Table types
+    Table,
+    TableRow,
+    TableCell,
+    TableProperties,
+    TableRowProperties,
+    TableCellProperties,
+    TableBorders,
+    TableBorder,
+    // Header/Footer types
+    Header,
+    Footer,
+    // Footnote/Endnote types
+    Footnote,
+    Endnote,
+    // Numbering types
+    Numbering,
+    AbstractNumDef,
+    ListLevel,
+    NumInstance,
+    LevelOverride,
+    // Content Control types
+    ContentControl,
+    ContentControlProperties,
 };
 pub use opc::OpcPackage;
 pub use document::WordDocument;
@@ -46,39 +82,67 @@ pub use document::WordDocument;
 pub struct ParsedDocument {
     /// Plain text content extracted from the document
     pub text: String,
-    
+
     /// Document styles indexed by style ID
     #[serde(default)]
     pub styles: std::collections::HashMap<String, Style>,
-    
+
     /// Number of paragraphs in the document
     pub paragraph_count: usize,
-    
+
     /// Number of characters in the document
     pub char_count: usize,
-    
+
     /// Number of words in the document
     pub word_count: usize,
-    
+
     /// Document title from core properties
     #[serde(default)]
     pub title: Option<String>,
-    
+
     /// Document author from core properties
     #[serde(default)]
     pub author: Option<String>,
-    
+
     /// Creation date from core properties
     #[serde(default)]
     pub created_at: Option<String>,
-    
+
     /// Modification date from core properties
     #[serde(default)]
     pub modified_at: Option<String>,
-    
+
     /// Theme colors (if available)
     #[serde(default)]
     pub theme: Option<Theme>,
+
+    /// Tables in the document
+    #[serde(default)]
+    pub tables: Vec<Table>,
+
+    /// Images in the document
+    #[serde(default)]
+    pub images: Vec<DocumentImage>,
+
+    /// Headers in the document
+    #[serde(default)]
+    pub headers: Vec<Header>,
+
+    /// Footers in the document
+    #[serde(default)]
+    pub footers: Vec<Footer>,
+
+    /// Footnotes in the document
+    #[serde(default)]
+    pub footnotes: Vec<Footnote>,
+
+    /// Endnotes in the document
+    #[serde(default)]
+    pub endnotes: Vec<Endnote>,
+
+    /// Numbering definitions (list styles)
+    #[serde(default)]
+    pub numbering: Vec<Numbering>,
 }
 
 impl Default for ParsedDocument {
@@ -94,6 +158,13 @@ impl Default for ParsedDocument {
             created_at: None,
             modified_at: None,
             theme: None,
+            tables: Vec::new(),
+            images: Vec::new(),
+            headers: Vec::new(),
+            footers: Vec::new(),
+            footnotes: Vec::new(),
+            endnotes: Vec::new(),
+            numbering: Vec::new(),
         }
     }
 }
@@ -152,6 +223,13 @@ pub fn parse_ooxml(file_data: &[u8]) -> Result<ParsedDocument, OoxmlError> {
         created_at,
         modified_at,
         theme: word_doc.theme,
+        tables: word_doc.tables,
+        images: word_doc.images,
+        headers: word_doc.headers,
+        footers: word_doc.footers,
+        footnotes: word_doc.footnotes,
+        endnotes: word_doc.endnotes,
+        numbering: word_doc.numbering,
     })
 }
 
@@ -249,11 +327,18 @@ mod tests {
             created_at: None,
             modified_at: None,
             theme: None,
+            tables: Vec::new(),
+            images: Vec::new(),
+            headers: Vec::new(),
+            footers: Vec::new(),
+            footnotes: Vec::new(),
+            endnotes: Vec::new(),
+            numbering: Vec::new(),
         };
-        
+
         let json = document_to_json(&doc).unwrap();
         let parsed = document_from_json(&json).unwrap();
-        
+
         assert_eq!(parsed.text, "Hello World");
         assert_eq!(parsed.paragraph_count, 1);
         assert_eq!(parsed.title, Some("Test Document".to_string()));

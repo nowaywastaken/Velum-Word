@@ -1,6 +1,6 @@
 use crate::piece_tree::{PieceTree, Piece, BufferId, TextAttributes};
-use crate::ooxml::types::{Paragraph, Run, RunProperties};
 use crate::ooxml::document::WordDocument;
+use crate::ooxml::types::RunProperties;
 
 /// Converts a parsed WordDocument into a PieceTree
 pub fn ooxml_to_piece_tree(doc: &WordDocument) -> PieceTree {
@@ -92,7 +92,7 @@ fn convert_run_properties(props: &RunProperties) -> TextAttributes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ooxml::types::{Paragraph, Run, RunProperties};
+    use crate::ooxml::types::{Paragraph, Run};
     use crate::ooxml::document::WordDocument;
     use std::collections::HashMap;
 
@@ -104,6 +104,13 @@ mod tests {
             styles: HashMap::new(),
             theme: None,
             core_properties: None,
+            tables: Vec::new(),
+            images: Vec::new(),
+            headers: Vec::new(),
+            footers: Vec::new(),
+            footnotes: Vec::new(),
+            endnotes: Vec::new(),
+            numbering: Vec::new(),
         };
 
         // Create a paragraph with mixed formatting
