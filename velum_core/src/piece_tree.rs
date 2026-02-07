@@ -1,7 +1,7 @@
 use serde::{Serialize, Deserialize};
 use crate::find::{SearchOptions, SearchResult, SearchResultSet, search, find_all_in_text};
 use std::fmt;
-use log::{debug, trace};
+use log::trace;
 
 /// Represents which buffer a piece comes from
 /// -1 means original buffer (index 0), other values are buffer indices
@@ -12,11 +12,11 @@ pub struct BufferId(pub isize);
 
 impl BufferId {
     pub const ORIGINAL: BufferId = BufferId(-1);
-    
+
     pub fn is_original(&self) -> bool {
         self.0 == -1
     }
-    
+
     pub fn to_index(&self) -> usize {
         if self.0 < 0 {
             0
@@ -208,13 +208,13 @@ impl PieceTree {
         }
         let length = content.len();
         let char_length = content.chars().count();
-        
+
         // Initial buffer
         let buffers = vec![content];
-        
+
         // Single piece covering the whole buffer
         let piece = Piece::new(0, length, BufferId::ORIGINAL, char_length);
-        
+
         PieceTree {
             pieces: vec![piece],
             buffers,
@@ -236,7 +236,7 @@ impl PieceTree {
             buffers: vec![String::new()],
             total_char_count: 0,
             total_length: 0,
-            next_buffer_index: 0,
+            next_buffer_index: 1,  // First insert should use BufferId(1), referencing buffers[1]
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             is_undoing_redoing: false,
@@ -249,7 +249,7 @@ impl PieceTree {
     pub fn from_loaded_data(pieces: Vec<Piece>, buffers: Vec<String>) -> Self {
         let total_char_count = pieces.iter().map(|p| p.piece_char_length).sum();
         let total_length = pieces.iter().map(|p| p.length).sum();
-        
+
         let next_buffer_index = if buffers.len() > 1 {
             buffers.len() as isize
         } else {
@@ -271,9 +271,12 @@ impl PieceTree {
     }
 
     /// Gets the next buffer ID and increments the counter
+    /// Buffer IDs: -1 = original buffer, 0, 1, 2... = added buffers
+    /// This maps directly to buffer array indices (0 = original, 1 = first added, etc.)
     fn next_buffer_id(&mut self) -> BufferId {
+        let id = BufferId(self.next_buffer_index);
         self.next_buffer_index += 1;
-        BufferId(self.next_buffer_index)
+        id
     }
 
     /// Gets buffer index from BufferId
@@ -337,31 +340,32 @@ impl PieceTree {
 
     // ==================== Insertion ====================
 
-    /// Inserts text at the specified byte offset (without attributes)
+    /// Inserts text at the specified character offset (without attributes)
     /// Returns true if successful
     pub fn insert(&mut self, offset: usize, text: String) -> bool {
         self.insert_with_attrs(offset, text, None)
     }
 
-    /// Inserts text at the specified byte offset with optional attributes
+    /// Inserts text at the specified character offset with optional attributes
     /// Returns true if successful
-    pub fn insert_with_attrs(&mut self, offset: usize, text: String, attributes: Option<TextAttributes>) -> bool {
+    pub fn insert_with_attrs(&mut self, char_offset: usize, text: String, attributes: Option<TextAttributes>) -> bool {
         if text.is_empty() {
             return true;
         }
 
         let char_count = text.chars().count();
         let byte_count = text.len();
-        
-        // Clamp offset
-        let offset = std::cmp::min(offset, self.total_length);
+
+        // Clamp offset to document length
+        let max_offset = self.total_char_count;
+        let char_offset = std::cmp::min(char_offset, max_offset);
 
         // Record change for undo
         if !self.is_undoing_redoing {
             // Save current selection for undo
             self.saved_selection = Some(self.selection);
             self.undo_stack.push(Change::Insert {
-                offset,
+                offset: char_offset,
                 length: byte_count,
             });
             if self.undo_stack.len() > MAX_UNDO_DEPTH {
@@ -370,9 +374,8 @@ impl PieceTree {
             self.redo_stack.clear();
         }
 
-        // Debug
-        debug!("insert: offset={}, text='{}' ({} bytes, {} chars)", 
-                  offset, text, byte_count, char_count);
+        trace!("insert: char_offset={}, text='{}' ({} bytes, {} chars)",
+                  char_offset, text, byte_count, char_count);
 
         // Add the new text to buffers
         let new_buffer_id = self.next_buffer_id();
@@ -386,13 +389,13 @@ impl PieceTree {
             self.total_length += byte_count;
             // Move selection after inserted text
             if !self.is_undoing_redoing {
-                self.move_selection_to(offset + char_count);
+                self.move_selection_to(char_offset + char_count);
             }
             return true;
         }
 
-        // Find position to insert (in characters, then convert to bytes)
-        let (piece_idx, char_offset) = match self.find_piece_and_char_offset(offset) {
+        // Find position to insert using character-based API
+        let (piece_idx, byte_offset_in_piece) = match self.find_piece_and_byte_offset_from_char(char_offset) {
             Some(result) => result,
             None => {
                 // Insert at end
@@ -402,247 +405,150 @@ impl PieceTree {
                 self.total_length += byte_count;
                 // Move selection after inserted text
                 if !self.is_undoing_redoing {
-                    self.move_selection_to(offset + char_count);
+                    self.move_selection_to(char_offset + char_count);
                 }
                 return true;
             }
         };
 
-        trace!("piece_idx={}, char_offset={}", piece_idx, char_offset);
+        trace!("piece_idx={}, byte_offset_in_piece={}", piece_idx, byte_offset_in_piece);
 
         let piece = &mut self.pieces[piece_idx];
-        
-        if char_offset == 0 {
+
+        if byte_offset_in_piece == 0 {
             // Insert at the beginning of this piece
             let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx, new_piece);
-            debug!("insert at beginning, pieces.len()={}", self.pieces.len());
-        } else if char_offset == piece.piece_char_length {
+            trace!("insert at beginning");
+        } else if byte_offset_in_piece == piece.length {
             // Insert at the end of this piece
             let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
             self.pieces.insert(piece_idx + 1, new_piece);
-            debug!("insert at end, pieces.len()={}", self.pieces.len());
+            trace!("insert at end");
         } else {
             // Split the piece and insert in the middle
-            // Get buffer for the piece being split
-            let piece_buffer_idx = Self::buffer_idx(&piece.buffer_id);
-            let piece_buffer = &self.buffers[piece_buffer_idx];
-            
-            // Find the byte offset that corresponds to the character boundary
-            let left_text: String = piece_buffer[piece.start..piece.start + piece.length]
-                .chars()
-                .take(char_offset)
-                .collect();
-            let left_byte_count = left_text.len();
-
-            trace!("left_text='{}' ({} bytes)", left_text, left_byte_count);
+            // byte_offset_in_piece is the character offset within the piece where we split
 
             // Capture original values before updating
+            let original_piece_start = piece.start;
             let original_piece_length = piece.length;
-            let original_piece_char_length = piece.piece_char_length;
-            
-            // Find the byte offset of the character at char_offset in the original piece
+
+            // Calculate left and right pieces using char_indices for correct UTF-8 handling
             let piece_buffer_idx = Self::buffer_idx(&piece.buffer_id);
             let piece_buffer = &self.buffers[piece_buffer_idx];
-            let original_piece_text = &piece_buffer[piece.start..piece.start + original_piece_length];
-            
-            // Get the byte offset right AFTER the character at char_offset - 1
-            // This is where the right piece should start
-            let right_piece_byte_offset: usize = if char_offset == 0 {
-                0
-            } else {
-                original_piece_text.char_indices()
-                    .nth(char_offset - 1)
-                    .map(|(byte_idx, c)| byte_idx + c.len_utf8())
-                    .unwrap_or(original_piece_length)
-            };
+            let original_piece_text = &piece_buffer[original_piece_start..original_piece_start + original_piece_length];
 
-            trace!("right_piece_byte_offset={}", right_piece_byte_offset);
+            // Get all characters in the piece
+            let chars: Vec<char> = original_piece_text.chars().collect();
+            let total_chars_in_piece = chars.len();
+
+            // Clamp byte_offset_in_piece to valid range
+            let split_char_idx = byte_offset_in_piece.min(total_chars_in_piece);
+
+            // left_piece: first split_char_idx characters
+            let left_chars: String = chars[..split_char_idx].iter().collect();
+            let left_byte_count = left_chars.len();
+            let left_char_count = left_chars.chars().count();
+
+            // right_piece: remaining characters
+            let right_chars: String = chars[split_char_idx..].iter().collect();
+            let right_piece_byte_length = right_chars.len();
+            let right_piece_char_length = right_chars.chars().count();
+
+            trace!("left='{}' ({} bytes, {} chars)", left_chars, left_byte_count, left_char_count);
+            trace!("right='{}' ({} bytes, {} chars)", right_chars, right_piece_byte_length, right_piece_char_length);
 
             // Update left piece
             piece.length = left_byte_count;
-            piece.piece_char_length = char_offset;
+            piece.piece_char_length = left_char_count;
 
-            // Create right piece with correct values (inherits attributes from original piece)
+            // Create right piece
             let right_piece = Piece::new_with_attrs(
-                piece.start + right_piece_byte_offset,
-                original_piece_length - right_piece_byte_offset,
+                original_piece_start + left_byte_count,
+                right_piece_byte_length,
                 piece.buffer_id,
-                original_piece_char_length - char_offset,
+                right_piece_char_length,
                 piece.attributes.clone(),
             );
 
-            // Insert new piece and right piece
+            // Create the new piece to insert
             let new_piece = Piece::new_with_attrs(0, byte_count, new_buffer_id, char_count, attributes);
-            
-            if right_piece.buffer_id == new_piece.buffer_id && 
-               right_piece.start == new_piece.start + new_piece.length {
-                // Merge right_piece into new_piece
-                let mut merged_piece = new_piece;
-                merged_piece.length += right_piece.length;
-                merged_piece.piece_char_length += right_piece.piece_char_length;
-                
-                // Just insert merged_piece at piece_idx + 1
-                self.pieces.insert(piece_idx + 1, merged_piece);
-            } else {
-                // Can't merge with right_piece, insert both
-                self.pieces.insert(piece_idx + 1, new_piece);
-                self.pieces.insert(piece_idx + 2, right_piece);
-            }
-            
-            debug!("insert middle, pieces.len()={}", self.pieces.len());
+
+            // Insert: left piece (unchanged idx) + new piece (idx+1) + right piece (idx+2)
+            self.pieces.insert(piece_idx + 1, new_piece);
+            self.pieces.insert(piece_idx + 2, right_piece);
+
+            trace!("insert middle");
         }
 
         self.total_char_count += char_count;
         self.total_length += byte_count;
-        
+
         // Move selection after inserted text
         if !self.is_undoing_redoing {
-            self.move_selection_to(offset + char_count);
+            self.move_selection_to(char_offset + char_count);
         }
-        
+
         true
     }
 
-    /// Finds the piece and character offset for a given byte position
-    fn find_piece_and_char_offset(&self, byte_offset: usize) -> Option<(usize, usize)> {
-        if byte_offset > self.total_length {
-            return None;
-        }
-
-        if byte_offset == 0 {
+    /// Finds the piece and byte offset for a given character position (character-based API)
+    /// Returns (piece_index, byte_offset_within_piece)
+    /// Returns None if char_offset is beyond the document
+    fn find_piece_and_byte_offset_from_char(&self, char_offset: usize) -> Option<(usize, usize)> {
+        if char_offset == 0 {
             if !self.pieces.is_empty() {
                 return Some((0, 0));
             }
             return None;
         }
 
-        let mut accumulated_bytes = 0usize;
         let mut accumulated_chars = 0usize;
 
         for (idx, piece) in self.pieces.iter().enumerate() {
-            let piece_start_bytes = accumulated_bytes;
-            let piece_end_bytes = accumulated_bytes + piece.length;
+            let piece_end_chars = accumulated_chars + piece.piece_char_length;
 
-            if byte_offset < piece_start_bytes {
+            if char_offset < accumulated_chars {
+                accumulated_chars = piece_end_chars;
                 continue;
             }
 
-            if byte_offset < piece_end_bytes {
-                // Calculate character offset within this piece (piece-local, not cumulative)
+            if char_offset < piece_end_chars {
+                // The character is within this piece
+                let char_offset_in_piece = char_offset - accumulated_chars;
+
+                // Find the byte offset for this character position
                 let piece_buffer_idx = Self::buffer_idx(&piece.buffer_id);
                 if let Some(buffer) = self.buffers.get(piece_buffer_idx) {
                     let piece_text = &buffer[piece.start..piece.start + piece.length];
-                    
-                    // Find the byte offset of the character that contains byte_offset
-                    // or the character right before it if byte_offset is in the middle of a char
-                    let byte_offset_in_piece = byte_offset - piece_start_bytes;
-                    let char_byte_offsets: Vec<usize> = piece_text.char_indices()
-                        .map(|(byte_idx, _)| byte_idx)
-                        .collect();
-                    
-                    // Find the valid byte offset (character boundary)
-                    let valid_byte_offset = if char_byte_offsets.is_empty() {
+
+                    // Find the byte offset of the char_offset_in_piece-th character
+                    let byte_offset: usize = if char_offset_in_piece == 0 {
                         0
-                    } else if byte_offset_in_piece >= *char_byte_offsets.last().unwrap() + 1 {
-                        // After the last character, use the end
-                        piece_text.len()
                     } else {
-                        // Find the character whose byte range contains byte_offset_in_piece
-                        // The character starts at or before byte_offset
-                        // Use >= to select the character STARTING AT byte_offset when exactly matching
-                        let mut valid = *char_byte_offsets.last().unwrap();
-                        for &char_start in &char_byte_offsets {
-                            if char_start >= byte_offset_in_piece {
-                                valid = char_start;
-                                break;
-                            }
-                            valid = char_start;
-                        }
-                        valid
+                        piece_text.char_indices()
+                            .nth(char_offset_in_piece - 1)
+                            .map(|(byte_idx, c)| byte_idx + c.len_utf8())
+                            .unwrap_or(piece.length)
                     };
-                    
-                    // Count characters before the valid byte offset
-                    let char_offset = char_byte_offsets.iter()
-                        .take_while(|&&byte_idx| byte_idx < valid_byte_offset)
-                        .count();
-                    
-                    return Some((idx, char_offset));
+
+                    return Some((idx, byte_offset));
                 }
             }
 
-            if byte_offset == piece_end_bytes {
-                // If there's a next piece, insert at the start of it
-                if idx + 1 < self.pieces.len() {
-                    return Some((idx + 1, 0));
-                }
-                // Otherwise, insert at the end of the last piece
-                return Some((idx, piece.piece_char_length));
-            }
-
-            accumulated_bytes = piece_end_bytes;
-            accumulated_chars += piece.piece_char_length;
-        }
-
-        // Position at the very end
-        if accumulated_bytes == byte_offset && !self.pieces.is_empty() {
-            let last_idx = self.pieces.len() - 1;
-            return Some((last_idx, accumulated_chars + self.pieces[last_idx].piece_char_length));
-        }
-
-        None
-    }
-
-    /// Helper to get the original length of a piece from its buffer
-    fn piece_length_original(&self) -> usize {
-        self.buffers[Self::buffer_idx(&self.pieces[0].buffer_id)].len()
-    }
-
-    /// Helper to get the original character length of a piece
-    fn piece_char_length_original(&self) -> usize {
-        self.buffers[Self::buffer_idx(&self.pieces[0].buffer_id)].chars().count()
-    }
-
-    /// Finds the piece and offset for a given byte position
-    fn find_piece_and_offset(&self, offset: usize) -> Option<(usize, usize)> {
-        if offset > self.total_length {
-            return None;
-        }
-
-        if offset == 0 {
-            // Special case: return the first piece at offset 0
-            if !self.pieces.is_empty() {
-                return Some((0, 0));
-            }
-            return None;
-        }
-
-        let mut accumulated = 0usize;
-
-        for (idx, piece) in self.pieces.iter().enumerate() {
-            let piece_start = accumulated;
-            let piece_end = accumulated + piece.length;
-
-            if offset < piece_start {
-                continue;
-            }
-
-            if offset < piece_end {
-                return Some((idx, offset - piece_start));
-            }
-
-            if offset == piece_end {
-                // Return position after this piece
+            if char_offset == piece_end_chars {
+                // At the boundary - return end of this piece
                 return Some((idx, piece.length));
             }
 
-            accumulated = piece_end;
+            accumulated_chars = piece_end_chars;
         }
 
-        // Position at the very end
-        if accumulated == offset && !self.pieces.is_empty() {
+        // Handle inserting at the exact end of the document
+        if accumulated_chars == char_offset && !self.pieces.is_empty() {
             let last_idx = self.pieces.len() - 1;
-            return Some((last_idx, self.pieces[last_idx].length));
+            let last_piece = &self.pieces[last_idx];
+            return Some((last_idx, last_piece.length));
         }
 
         None
@@ -703,7 +609,7 @@ impl PieceTree {
             // This piece overlaps with the delete range
             let delete_start_in_piece = if offset > piece_start { offset - piece_start } else { 0 };
             let delete_end_in_piece = if end_offset < piece_end { end_offset - piece_start } else { piece.length };
-            
+
             deleted_bytes += delete_end_in_piece - delete_start_in_piece;
             deleted_chars += delete_end_in_piece - delete_start_in_piece;
 
@@ -744,7 +650,7 @@ impl PieceTree {
         if !self.is_undoing_redoing {
             let delete_start = offset;
             let delete_end = end_offset;
-            
+
             // If selection is entirely after deleted range, shift it left
             if self.selection.start() >= delete_end {
                 let shift = delete_end - delete_start;
@@ -799,8 +705,13 @@ impl PieceTree {
             let end_in_piece = if end_offset < piece_end { end_offset - piece_start } else { piece.length };
 
             let buffer_idx = Self::buffer_idx(&piece.buffer_id);
-            let buffer = &self.buffers[buffer_idx];
-            result.push_str(&buffer[piece.start + start_in_piece..piece.start + end_in_piece]);
+            if let Some(buffer) = self.buffers.get(buffer_idx) {
+                let start_byte = piece.start + start_in_piece;
+                let end_byte = piece.start + end_in_piece;
+                if start_byte < buffer.len() && end_byte <= buffer.len() {
+                    result.push_str(&buffer[start_byte..end_byte]);
+                }
+            }
 
             current_offset = piece_end;
         }
@@ -900,7 +811,7 @@ impl PieceTree {
                 } else {
                     ""
                 };
-                
+
                 for c in piece_text.chars() {
                     if char_count >= char_offset {
                         return (line, column);
@@ -924,7 +835,7 @@ impl PieceTree {
         }
 
         line = full_text.chars().filter(|&c| c == '\n').count() + 1;
-        
+
         if let Some(last_newline_pos) = full_text.rfind('\n') {
             column = full_text[last_newline_pos + 1..].chars().count() + 1;
         } else {
@@ -1094,13 +1005,13 @@ impl PieceTree {
         if let Some(result) = self.find_next(options, from) {
             let matched_text = result.matched_text.clone();
             let matched_len = matched_text.len();
-            
+
             // Delete the matched text
             self.delete(result.start, matched_len);
-            
+
             // Insert the replacement
             self.insert(result.start, options.replace.clone());
-            
+
             true
         } else {
             false
@@ -1114,9 +1025,8 @@ impl PieceTree {
             return 0;
         }
 
-        let text = self.get_text();
         let results = self.find_all(options);
-        
+
         if results.results.is_empty() {
             return 0;
         }
@@ -1125,13 +1035,13 @@ impl PieceTree {
         let mut replacements = 0;
         for result in results.results.iter().rev() {
             let matched_len = result.matched_text.len();
-            
+
             // Delete the matched text
             self.delete(result.start, matched_len);
-            
+
             // Insert the replacement
             self.insert(result.start, options.replace.clone());
-            
+
             replacements += 1;
         }
 
@@ -1151,7 +1061,7 @@ impl PieceTree {
             wrap_around: true,
             search_backward: false,
         });
-        
+
         let results = self.find_all(&options);
         serde_json::to_string(&results).unwrap_or_else(|_| "{}".to_string())
     }
@@ -1172,7 +1082,7 @@ impl PieceTree {
             replace: replace.to_string(),
             ..Default::default()
         };
-        
+
         if all {
             self.replace_all(&options) as i32
         } else {
@@ -1182,7 +1092,7 @@ impl PieceTree {
 
     /// Debug: prints tree structure
     pub fn debug_print(&self) {
-        println!("PieceTree with {} pieces, {} chars, {} bytes", 
+        println!("PieceTree with {} pieces, {} chars, {} bytes",
                  self.pieces.len(), self.total_char_count, self.total_length);
         for (i, piece) in self.pieces.iter().enumerate() {
             let buffer_idx = Self::buffer_idx(&piece.buffer_id);
@@ -1249,18 +1159,18 @@ mod tests {
 
     #[test]
     fn test_piece_tree_get_range() {
-        let mut pt = PieceTree::new("Hello Beautiful World".to_string());
+        let pt = PieceTree::new("Hello Beautiful World".to_string());
         let range = pt.get_text_range(6, 9);
         assert_eq!(range, "Beautiful");
     }
 
     #[test]
     fn test_piece_tree_move_to() {
-        let mut pt = PieceTree::new("Hello\nWorld".to_string());
+        let pt = PieceTree::new("Hello\nWorld".to_string());
         let (line, col) = pt.move_to(6);
         assert_eq!(line, 2);
         assert_eq!(col, 1);
-        
+
         let (line, col) = pt.move_to(0);
         assert_eq!(line, 1);
         assert_eq!(col, 1);
@@ -1353,7 +1263,7 @@ mod tests {
         pt.insert(0, "Line 1\n".to_string());
         pt.insert(7, "Line 2\n".to_string());
         pt.insert(14, "Line 3".to_string());
-        
+
         assert_eq!(pt.get_text(), "Line 1\nLine 2\nLine 3");
         assert_eq!(pt.get_line_count(), 3);
         assert_eq!(pt.get_line(1).unwrap(), "Line 1");
@@ -1363,7 +1273,7 @@ mod tests {
 
     #[test]
     fn test_piece_tree_move_to_end() {
-        let mut pt = PieceTree::new("Hello\nWorld".to_string());
+        let pt = PieceTree::new("Hello\nWorld".to_string());
         let (line, col) = pt.move_to(11);
         assert_eq!(line, 2);
         assert_eq!(col, 6);
@@ -1418,11 +1328,11 @@ mod tests {
         let sel = Selection::new(0, 0);
         assert!(sel.is_empty());
         assert!(sel.collapsed());
-        
+
         let sel = Selection::new(5, 5);
         assert!(sel.is_empty());
         assert!(sel.collapsed());
-        
+
         let sel = Selection::new(0, 5);
         assert!(!sel.is_empty());
         assert!(!sel.collapsed());
@@ -1431,17 +1341,17 @@ mod tests {
     #[test]
     fn test_piece_tree_selection() {
         let mut pt = PieceTree::new("Hello World".to_string());
-        
+
         // Default selection should be at end
         assert_eq!(pt.get_selection_anchor(), 0);
         assert_eq!(pt.get_selection_active(), 0);
-        
+
         // Set selection
         pt.set_selection(0, 5);
         assert_eq!(pt.get_selection_anchor(), 0);
         assert_eq!(pt.get_selection_active(), 5);
         assert!(pt.has_selection());
-        
+
         // Move selection
         pt.move_selection_to(10);
         assert_eq!(pt.get_selection_anchor(), 10);
@@ -1454,10 +1364,10 @@ mod tests {
         let mut pt = PieceTree::new("Hello World".to_string());
         pt.set_selection(0, 5);
         assert_eq!(pt.get_selection_text(), "Hello");
-        
+
         pt.set_selection(6, 11);
         assert_eq!(pt.get_selection_text(), "World");
-        
+
         pt.set_selection(5, 5); // collapsed
         assert_eq!(pt.get_selection_text(), "");
     }
@@ -1465,10 +1375,10 @@ mod tests {
     #[test]
     fn test_piece_tree_selection_after_insert() {
         let mut pt = PieceTree::new("Hello World".to_string());
-        
+
         // Set selection in the middle
         pt.set_selection(5, 5); // cursor after "Hello"
-        
+
         // Insert text - selection should move after inserted text
         pt.insert(5, " Beautiful".to_string());
         assert_eq!(pt.get_text(), "Hello Beautiful World");
@@ -1479,14 +1389,14 @@ mod tests {
     #[test]
     fn test_piece_tree_selection_after_delete() {
         let mut pt = PieceTree::new("Hello Beautiful World".to_string());
-        
+
         // Set selection after "Hello"
         pt.set_selection(5, 5);
-        
+
         // Delete " Beautiful" (10 chars)
         pt.delete(5, 10);
         assert_eq!(pt.get_text(), "Hello World");
-        
+
         // Selection should be at delete position
         assert_eq!(pt.get_selection_anchor(), 5);
         assert_eq!(pt.get_selection_active(), 5);
@@ -1495,14 +1405,14 @@ mod tests {
     #[test]
     fn test_piece_tree_selection_adjust_after_delete() {
         let mut pt = PieceTree::new("Hello World".to_string());
-        
+
         // Set selection after deleted range
         pt.set_selection(10, 10); // at end
-        
+
         // Delete "Hello " (6 chars)
         pt.delete(0, 6);
         assert_eq!(pt.get_text(), "World");
-        
+
         // Selection should shift left by 6
         assert_eq!(pt.get_selection_anchor(), 4);
         assert_eq!(pt.get_selection_active(), 4);
@@ -1513,7 +1423,7 @@ mod tests {
         let mut pt = PieceTree::new("Hello World".to_string());
         pt.set_selection(0, 5);
         assert_eq!(pt.get_selection_range(), (0, 5));
-        
+
         pt.set_selection(5, 0); // reversed
         assert_eq!(pt.get_selection_range(), (0, 5));
     }
@@ -1523,7 +1433,7 @@ mod tests {
         let mut pt = PieceTree::new("Hello World".to_string());
         pt.set_selection(0, 5);
         assert!(pt.has_selection());
-        
+
         pt.clear_selection();
         assert!(!pt.has_selection());
         assert_eq!(pt.get_selection_anchor(), 11); // end of text

@@ -721,8 +721,7 @@ pub fn remove_text_attributes(start: usize, end: usize) -> String {
 pub fn get_text_with_attributes() -> String {
     let doc = DOCUMENT.read().unwrap();
     let mut result = Vec::new();
-    
-    let mut accumulated_chars = 0usize;
+
     for piece in &doc.content.pieces {
         let buffer_idx = PieceTree::buffer_idx(&piece.buffer_id);
         if let Some(buffer) = doc.content.buffers.get(buffer_idx) {
@@ -738,13 +737,12 @@ pub fn get_text_with_attributes() -> String {
                 "null".to_string()
             };
             
-            result.push(format!("{{\"text\": \"{}\", \"attrs\": {}}}", 
+            result.push(format!("{{\"text\": \"{}\", \"attrs\": {}}}",
                 piece_text.replace('"', "\\\"").replace('\n', "\\n"),
                 attrs_json));
         }
-        accumulated_chars += piece.piece_char_length;
     }
-    
+
     format!("[{}]", result.join(", "))
 }
 

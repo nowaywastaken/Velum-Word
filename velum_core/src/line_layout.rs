@@ -3,9 +3,42 @@
 //! Provides higher-level text layout functionality including paragraph layout
 //! and bidirectional text support.
 
-use crate::line_breaking::{BreakType, Line, LineBreaker};
+use crate::line_breaking::{BreakType, LineBreaker};
 use serde::{Deserialize, Serialize};
-use unicode_bidi::BidiInfo;
+
+/// Line spacing rule enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum LineSpacingRule {
+    Single,     // 单倍行距 (1.0)
+    OneAndHalf, // 1.5倍行距
+    Double,     // 2倍行距
+    AtLeast,    // 最小值
+    Exactly,    // 固定值
+    Multiple,   // 多倍行距 (如 1.25)
+}
+
+/// Text alignment enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Alignment {
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+/// Default implementation for Alignment
+impl Default for Alignment {
+    fn default() -> Self {
+        Alignment::Left
+    }
+}
+
+/// Default implementation for LineSpacingRule
+impl Default for LineSpacingRule {
+    fn default() -> Self {
+        LineSpacingRule::Single
+    }
+}
 
 /// Represents a line with visual layout information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +76,103 @@ pub struct LineLayoutInfo {
     pub is_bidi: bool,
     /// Trailing whitespace width
     pub trailing_whitespace: f32,
+    /// Left offset for indentation
+    pub offset_x: f32,
+    /// Actual line height used
+    pub line_height: f32,
+}
+
+/// Paragraph properties for layout customization
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ParagraphProperties {
+    /// Left indent in twips (1/1440 of an inch)
+    pub indent_left: f32,
+    /// Right indent in twips
+    pub indent_right: f32,
+    /// First line indent in twips (can be negative for hanging indent)
+    pub indent_first_line: f32,
+    /// Space before paragraph in twips
+    pub space_before: f32,
+    /// Space after paragraph in twips
+    pub space_after: f32,
+    /// Line spacing value (interpretation depends on line_spacing_rule)
+    pub line_spacing: f32,
+    /// Line spacing rule
+    pub line_spacing_rule: LineSpacingRule,
+    /// Text alignment
+    pub alignment: Alignment,
+}
+
+impl Default for ParagraphProperties {
+    fn default() -> Self {
+        ParagraphProperties {
+            indent_left: 0.0,
+            indent_right: 0.0,
+            indent_first_line: 0.0,
+            space_before: 0.0,
+            space_after: 0.0,
+            line_spacing: 1.0,
+            line_spacing_rule: LineSpacingRule::Single,
+            alignment: Alignment::default(),
+        }
+    }
+}
+
+/// Helper methods for ParagraphProperties
+impl ParagraphProperties {
+    /// Creates paragraph properties with left and right indent
+    #[inline]
+    pub fn with_indent(left: f32, right: f32, first_line: f32) -> Self {
+        ParagraphProperties {
+            indent_left: left,
+            indent_right: right,
+            indent_first_line: first_line,
+            ..Default::default()
+        }
+    }
+
+    /// Creates paragraph properties with alignment
+    #[inline]
+    pub fn with_alignment(alignment: Alignment) -> Self {
+        ParagraphProperties {
+            alignment,
+            ..Default::default()
+        }
+    }
+
+    /// Creates paragraph properties with line spacing
+    #[inline]
+    pub fn with_line_spacing(rule: LineSpacingRule, value: f32) -> Self {
+        ParagraphProperties {
+            line_spacing_rule: rule,
+            line_spacing: value,
+            ..Default::default()
+        }
+    }
+
+    /// Creates paragraph properties with full customization
+    #[inline]
+    pub fn new(
+        indent_left: f32,
+        indent_right: f32,
+        indent_first_line: f32,
+        space_before: f32,
+        space_after: f32,
+        line_spacing: f32,
+        line_spacing_rule: LineSpacingRule,
+        alignment: Alignment,
+    ) -> Self {
+        ParagraphProperties {
+            indent_left,
+            indent_right,
+            indent_first_line,
+            space_before,
+            space_after,
+            line_spacing,
+            line_spacing_rule,
+            alignment,
+        }
+    }
 }
 
 /// Complete paragraph layout result
@@ -52,12 +182,20 @@ pub struct ParagraphLayout {
     pub text: String,
     /// Maximum line width used
     pub max_width: f32,
+    /// Available content width (max_width - left_indent - right_indent)
+    pub content_width: f32,
     /// Individual line layouts
     pub lines: Vec<LineLayoutInfo>,
-    /// Total height (lines * line_height)
+    /// Total height (lines * line_height + space_before + space_after)
     pub total_height: f32,
+    /// Base line height (without spacing rules)
+    pub base_line_height: f32,
+    /// Actual line height used
+    pub actual_line_height: f32,
     /// Whether text contains bidirectional content
     pub has_bidi: bool,
+    /// Paragraph properties used
+    pub properties: ParagraphProperties,
 }
 
 /// Complete document layout result
@@ -150,15 +288,65 @@ impl LineLayout {
         self.config.bidi_enabled = enabled;
     }
 
-    /// Layouts a single paragraph
+    /// Calculates the line height based on spacing rule
+    fn calculate_line_height(&self, base_height: f32, props: ParagraphProperties) -> f32 {
+        match props.line_spacing_rule {
+            LineSpacingRule::Single => base_height * 1.0,
+            LineSpacingRule::OneAndHalf => base_height * 1.5,
+            LineSpacingRule::Double => base_height * 2.0,
+            LineSpacingRule::Exactly => props.line_spacing,
+            LineSpacingRule::AtLeast => base_height.max(props.line_spacing),
+            LineSpacingRule::Multiple => base_height * props.line_spacing,
+        }
+    }
+
+    /// Calculates the left offset for a line based on indentation
+    fn calculate_line_offset(&self, line_index: usize, props: ParagraphProperties) -> f32 {
+        let left_indent = props.indent_left;
+        let first_line_indent = props.indent_first_line;
+
+        if line_index == 0 {
+            // First line: left + first_line indent
+            left_indent + first_line_indent
+        } else {
+            // Subsequent lines: just left indent
+            left_indent
+        }
+    }
+
+    /// Layouts a single paragraph with default properties
     pub fn layout_paragraph(&mut self, text: &str, max_width: f32) -> ParagraphLayout {
-        self.breaker.set_max_width(max_width);
+        self.layout_paragraph_with_props(text, max_width, ParagraphProperties::default())
+    }
+
+    /// Layouts a single paragraph with custom properties
+    pub fn layout_paragraph_with_props(
+        &mut self,
+        text: &str,
+        max_width: f32,
+        props: ParagraphProperties,
+    ) -> ParagraphLayout {
+        // Calculate content width (accounting for left and right indent)
+        // Convert twips to abstract units (assuming 1440 twips per inch)
+        let twips_to_units = max_width / 1440.0;
+        let left_indent_units = props.indent_left * twips_to_units;
+        let right_indent_units = props.indent_right * twips_to_units;
+        let content_width = max_width - left_indent_units - right_indent_units;
+
+        // Set breaker max width to content width
+        self.breaker.set_max_width(content_width);
 
         let lines = self.breaker.break_lines(text, None);
         let mut layout_lines = Vec::new();
 
         let mut has_bidi = false;
         let mut char_offset = 0usize;
+
+        // Calculate base line height
+        let base_line_height = self.config.line_height * self.config.font_size;
+
+        // Calculate actual line height based on spacing rule
+        let actual_line_height = self.calculate_line_height(base_line_height, props);
 
         for (i, line) in lines.iter().enumerate() {
             if line.is_empty() {
@@ -171,6 +359,8 @@ impl LineLayout {
                     char_count: 0,
                     is_bidi: false,
                     trailing_whitespace: 0.0,
+                    offset_x: left_indent_units,
+                    line_height: actual_line_height,
                 });
                 continue;
             }
@@ -202,11 +392,19 @@ impl LineLayout {
 
             // Calculate trailing whitespace
             let trailing_ws = if self.config.trim_trailing {
-                let trimmed: String = line_text.chars().rev().take_while(|c| c.is_whitespace()).collect();
-                self.breaker.calculate_text_width(&trimmed.chars().rev().collect::<String>())
+                let trimmed: String = line_text
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_whitespace())
+                    .collect();
+                self.breaker
+                    .calculate_text_width(&trimmed.chars().rev().collect::<String>())
             } else {
                 0.0
             };
+
+            // Calculate line offset based on indentation
+            let offset_x = self.calculate_line_offset(i, props);
 
             let break_type_str = match line.break_type {
                 BreakType::HardBreak => "HardBreak",
@@ -223,36 +421,56 @@ impl LineLayout {
                 char_count,
                 is_bidi,
                 trailing_whitespace: trailing_ws,
+                offset_x,
+                line_height: actual_line_height,
             });
 
             char_offset = line.end;
         }
 
-        let total_height = layout_lines.len() as f32 * self.config.line_height * self.config.font_size;
+        // Calculate total height: lines * line_height + space_before + space_after
+        let space_before_units = props.space_before * twips_to_units;
+        let space_after_units = props.space_after * twips_to_units;
+        let total_height =
+            layout_lines.len() as f32 * actual_line_height + space_before_units + space_after_units;
 
         ParagraphLayout {
             text: text.to_string(),
             max_width,
+            content_width,
             lines: layout_lines,
             total_height,
+            base_line_height,
+            actual_line_height,
             has_bidi,
+            properties: props,
         }
     }
 
     /// Layouts a full document with multiple paragraphs
     pub fn layout_document(&mut self, text: &str, max_width: f32) -> DocumentLayout {
+        self.layout_document_with_props(text, max_width, ParagraphProperties::default())
+    }
+
+    /// Layouts a full document with custom paragraph properties
+    pub fn layout_document_with_props(
+        &mut self,
+        text: &str,
+        max_width: f32,
+        props: ParagraphProperties,
+    ) -> DocumentLayout {
         let paragraphs: Vec<&str> = text.split('\n').collect();
         let mut all_paragraphs = Vec::new();
         let mut total_width = 0.0f32;
         let mut total_height = 0.0f32;
 
         for paragraph in paragraphs {
-            let layout = self.layout_paragraph(paragraph, max_width);
+            let layout = self.layout_paragraph_with_props(paragraph, max_width, props);
 
             // Track maximum width
             for line in &layout.lines {
-                if line.width > total_width {
-                    total_width = line.width;
+                if line.width + line.offset_x > total_width {
+                    total_width = line.width + line.offset_x;
                 }
             }
 
@@ -271,6 +489,17 @@ impl LineLayout {
     /// Layouts text and returns JSON string
     pub fn layout_to_json(&mut self, text: &str, max_width: f32) -> String {
         let layout = self.layout_document(text, max_width);
+        serde_json::to_string(&layout).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Layouts text with properties and returns JSON string
+    pub fn layout_to_json_with_props(
+        &mut self,
+        text: &str,
+        max_width: f32,
+        props: ParagraphProperties,
+    ) -> String {
+        let layout = self.layout_document_with_props(text, max_width, props);
         serde_json::to_string(&layout).unwrap_or_else(|_| "{}".to_string())
     }
 
@@ -306,7 +535,10 @@ pub mod measure {
     /// Gets the number of lines needed for text at given width
     pub fn get_line_count(text: &str, max_width: f32) -> usize {
         let mut layout = LineLayout::new();
-        layout.breaker_mut().break_lines(text, Some(max_width)).len()
+        layout
+            .breaker_mut()
+            .break_lines(text, Some(max_width))
+            .len()
     }
 
     /// Gets the height needed for text at given width
@@ -369,8 +601,8 @@ mod tests {
     fn test_cjk_text_layout() {
         let mut layout = LineLayout::new();
         let text = "这是一个测试段落，用于测试中文分行功能是否正常工作。";
-        // 500px ~ 30 chars. Text is 20+ chars. 
-        // Let's make it tight to force wrap? 
+        // 500px ~ 30 chars. Text is 20+ chars.
+        // Let's make it tight to force wrap?
         // 16px * 10 = 160px.
         let result = layout.layout_paragraph(text, 160.0);
 
@@ -433,6 +665,273 @@ mod tests {
 
         if let Some(line) = result.lines.first() {
             assert!(line.trailing_whitespace >= 0.0);
+        }
+    }
+
+    // New tests for paragraph properties
+
+    #[test]
+    fn test_paragraph_properties_default() {
+        let props = ParagraphProperties::default();
+        assert_eq!(props.indent_left, 0.0);
+        assert_eq!(props.indent_right, 0.0);
+        assert_eq!(props.indent_first_line, 0.0);
+        assert_eq!(props.alignment, Alignment::Left);
+        assert_eq!(props.line_spacing_rule, LineSpacingRule::Single);
+    }
+
+    #[test]
+    fn test_paragraph_with_indent() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_indent(360.0, 180.0, 360.0); // 0.25", 0.125", 0.25"
+        let result = layout.layout_paragraph_with_props("Test paragraph", 1000.0, props);
+
+        // First line should have left + first_line indent
+        if let Some(first_line) = result.lines.first() {
+            assert!(first_line.offset_x > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_line_spacing_single() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Single, 1.0);
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        assert_eq!(result.properties.line_spacing_rule, LineSpacingRule::Single);
+        assert_eq!(result.actual_line_height, result.base_line_height);
+    }
+
+    #[test]
+    fn test_line_spacing_double() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Double, 2.0);
+        let result = layout.layout_paragraph_with_props("Test\nLine2\nLine3", 1000.0, props);
+
+        assert_eq!(result.properties.line_spacing_rule, LineSpacingRule::Double);
+        assert_eq!(result.actual_line_height, result.base_line_height * 2.0);
+    }
+
+    #[test]
+    fn test_line_spacing_exactly() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Exactly, 30.0);
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        assert_eq!(
+            result.properties.line_spacing_rule,
+            LineSpacingRule::Exactly
+        );
+        assert_eq!(result.actual_line_height, 30.0);
+    }
+
+    #[test]
+    fn test_line_spacing_multiple() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Multiple, 1.5);
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        assert_eq!(
+            result.properties.line_spacing_rule,
+            LineSpacingRule::Multiple
+        );
+        assert_eq!(result.actual_line_height, result.base_line_height * 1.5);
+    }
+
+    #[test]
+    fn test_alignment_left() {
+        let props = ParagraphProperties::with_alignment(Alignment::Left);
+        assert_eq!(props.alignment, Alignment::Left);
+    }
+
+    #[test]
+    fn test_alignment_right() {
+        let props = ParagraphProperties::with_alignment(Alignment::Right);
+        assert_eq!(props.alignment, Alignment::Right);
+    }
+
+    #[test]
+    fn test_alignment_center() {
+        let props = ParagraphProperties::with_alignment(Alignment::Center);
+        assert_eq!(props.alignment, Alignment::Center);
+    }
+
+    #[test]
+    fn test_alignment_justify() {
+        let props = ParagraphProperties::with_alignment(Alignment::Justify);
+        assert_eq!(props.alignment, Alignment::Justify);
+    }
+
+    #[test]
+    fn test_paragraph_properties_new() {
+        let props = ParagraphProperties::new(
+            360.0, // indent_left
+            180.0, // indent_right
+            360.0, // indent_first_line
+            144.0, // space_before (0.1")
+            144.0, // space_after (0.1")
+            1.5,   // line_spacing
+            LineSpacingRule::Multiple,
+            Alignment::Center,
+        );
+
+        assert_eq!(props.indent_left, 360.0);
+        assert_eq!(props.indent_right, 180.0);
+        assert_eq!(props.indent_first_line, 360.0);
+        assert_eq!(props.space_before, 144.0);
+        assert_eq!(props.space_after, 144.0);
+        assert_eq!(props.line_spacing, 1.5);
+        assert_eq!(props.line_spacing_rule, LineSpacingRule::Multiple);
+        assert_eq!(props.alignment, Alignment::Center);
+    }
+
+    #[test]
+    fn test_content_width_with_indent() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_indent(720.0, 360.0, 0.0); // 0.5", 0.25"
+        let result = layout.layout_paragraph_with_props("Test", 1440.0, props);
+
+        // Content width should be max_width - left - right
+        let expected_content = 1440.0 - 720.0 * (1440.0 / 1440.0) - 360.0 * (1440.0 / 1440.0);
+        // Note: twips_to_units factor is applied, so with max_width=1440.0 and same value in twips,
+        // the conversion factor is 1.0
+        assert_eq!(result.content_width, expected_content);
+    }
+
+    #[test]
+    fn test_space_before_after() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::new(
+            0.0,
+            0.0,
+            0.0,
+            720.0, // space_before: 0.5"
+            720.0, // space_after: 0.5"
+            1.0,
+            LineSpacingRule::Single,
+            Alignment::Left,
+        );
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        // Total height should include space_before and space_after
+        assert!(result.total_height > result.lines.len() as f32 * result.actual_line_height);
+    }
+
+    #[test]
+    fn test_first_line_indent_only_on_first_line() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_indent(0.0, 0.0, 500.0); // First line only indent
+        let result = layout.layout_paragraph_with_props("Line 1\nLine 2\nLine 3", 1000.0, props);
+
+        if result.lines.len() >= 2 {
+            // First line should have indent
+            assert!(result.lines[0].offset_x > 0.0);
+            // Second line should not have first_line indent
+            assert_eq!(result.lines[1].offset_x, 0.0);
+        }
+    }
+
+    #[test]
+    fn test_hanging_indent() {
+        let mut layout = LineLayout::new();
+        // Negative first line indent = hanging indent
+        let props = ParagraphProperties::with_indent(1000.0, 0.0, -500.0);
+        let result = layout.layout_paragraph_with_props("Line 1\nLine 2", 2000.0, props);
+
+        // First line should have less indent than subsequent lines
+        if result.lines.len() >= 2 {
+            assert!(result.lines[0].offset_x < result.lines[1].offset_x);
+        }
+    }
+
+    #[test]
+    fn test_line_spacing_at_least() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::AtLeast, 40.0);
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        assert_eq!(
+            result.properties.line_spacing_rule,
+            LineSpacingRule::AtLeast
+        );
+        assert!(result.actual_line_height >= 40.0);
+    }
+
+    #[test]
+    fn test_line_spacing_at_least_larger_than_base() {
+        let mut layout = LineLayout::new();
+        layout.set_line_height(1.0);
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::AtLeast, 50.0);
+        let result = layout.layout_paragraph_with_props("Test", 1000.0, props);
+
+        // When base is smaller than AtLeast value, use AtLeast value
+        assert!(result.actual_line_height >= 50.0);
+    }
+
+    #[test]
+    fn test_multiline_with_spacing_rules() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Double, 2.0);
+        let result = layout.layout_paragraph_with_props(
+            "First line\nSecond line\nThird line",
+            1000.0,
+            props,
+        );
+
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.properties.line_spacing_rule, LineSpacingRule::Double);
+        assert_eq!(result.actual_line_height, result.base_line_height * 2.0);
+    }
+
+    #[test]
+    fn test_all_alignments() {
+        let alignments = [
+            Alignment::Left,
+            Alignment::Right,
+            Alignment::Center,
+            Alignment::Justify,
+        ];
+
+        for &align in &alignments {
+            let props = ParagraphProperties::with_alignment(align);
+            assert_eq!(props.alignment, align);
+        }
+    }
+
+    #[test]
+    fn test_twips_conversion() {
+        let mut layout = LineLayout::new();
+        // 1440 twips = 1 inch = max_width when max_width=1440
+        let props = ParagraphProperties::with_indent(1440.0, 720.0, 360.0);
+        let result = layout.layout_paragraph_with_props("Test", 1440.0, props);
+
+        // Conversion factor should be 1.0 when max_width equals twips base
+        let expected_offset = 1440.0 + 360.0; // left + first_line
+        assert!((result.lines[0].offset_x - expected_offset).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_empty_lines_preserved() {
+        let mut layout = LineLayout::new();
+        let text = "Line 1\n\nLine 3";
+        let result =
+            layout.layout_paragraph_with_props(text, 1000.0, ParagraphProperties::default());
+
+        assert_eq!(result.lines.len(), 3);
+        // Empty line should have zero width
+        assert_eq!(result.lines[1].width, 0.0);
+    }
+
+    #[test]
+    fn test_document_with_custom_props() {
+        let mut layout = LineLayout::new();
+        let props = ParagraphProperties::with_line_spacing(LineSpacingRule::Double, 2.0);
+        let text = "Para 1\nPara 2\nPara 3";
+        let result = layout.layout_document_with_props(text, 1000.0, props);
+
+        assert_eq!(result.paragraphs.len(), 3);
+        for para in &result.paragraphs {
+            assert_eq!(para.properties.line_spacing_rule, LineSpacingRule::Double);
         }
     }
 }
